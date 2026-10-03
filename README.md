@@ -4,6 +4,9 @@
 automatic covers, DualSense support, and an installer payload. Everything about the port (install, controls,
 building) is in **[ps5/README.md](ps5/README.md)**. Port by [github.com/MisterTemaki](https://github.com/MisterTemaki).
 
+The home screen (the 3D game shelf with automatic covers) and the app's design are based on the idea of
+[PS5SX2](https://github.com/Swordpdf/PS5SX2), the PCSX2 port for the PS5.
+
 The rest of this repository is the original Snes9x source; its README follows.
 
 ---
