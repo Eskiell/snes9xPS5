@@ -1,0 +1,304 @@
+#!/bin/bash
+# Snes9x PS5 host tests: the real port code (main-boot, shims, frontend, Snes9x core; the installer and the
+# helper) on Linux, with the PS5 calls faked by host/sce_host.cpp. A scripted pad drives the app; flips are
+# de-tiled to PPM and checked.
+set -u
+cd "$(dirname "$0")/.."
+BIN=$PWD/build/host/snes9x-ps5-host
+INSTALLER=$PWD/build/host/snes9x-ps5-installer
+HELPER=$PWD/build/host/snes9x-ps5-helper
+# ports nobody listens on, so the app's ordinary runs find no helper and no ELF loader
+export SNES9X_HELPER_PORT=$((20000 + RANDOM % 10000)) SNES9X_ELFLDR_PORT=$((30000 + RANDOM % 10000)) SNES9X_JB_NO_OTHERS=1
+CHECK="python3 $PWD/tests/check_ppm.py"
+WORK=${WORK:-$(mktemp -d)}
+PASS=0
+FAIL=0
+
+# pad bits
+CROSS=4000; CIRCLE=2000; UP=10; DOWN=40; L2=100; L3R3=6; OPTIONS=8
+
+ok() { echo "  ok: $*"; PASS=$((PASS + 1)); }
+bad() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
+expect() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
+
+newroot() {
+	local t=$WORK/$1
+	rm -rf "$t" && mkdir -p "$t/root/roms" "$t/dump"
+	echo "$t"
+}
+
+run() { # dir pad dumps [args...]
+	local t=$1 pad=$2 dumps=$3
+	shift 3
+	SNES9X_HOST_OFFLINE=${OFFLINE-1} SNES9X_COVER_URL=${COVER_URL-} \
+	SNES9X_PS5_ROOT=$t/root SNES9X_PS5_HOMEBREW=$t/homebrew SNES9X_HOST_DUMP_DIR=$t/dump SNES9X_HOST_DUMP=$dumps SNES9X_HOST_MAX_FLIPS=5000 \
+		SNES9X_HOST_PAD=$pad ASAN_OPTIONS=detect_leaks=0 timeout 120 "$BIN" "$@" >"$t/out.txt" 2>&1
+	echo $?
+}
+
+echo "== 1. a ROM from the command line: picture, input, quick save, quit from the pause menu"
+T=$(newroot t1)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;100:$CROSS;140:0;200:$(printf %x $((0x$L2 | 0x$UP)));205:0;220:$L3R3;225:0;240:$UP;242:0;250:$CROSS;252:0" "90,130" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "$CHECK $T/dump/flip00090.ppm 960 540 255 0 0 >/dev/null" "red backdrop in the middle at flip 90"
+expect "$CHECK $T/dump/flip00090.ppm 100 540 0 0 0 >/dev/null" "black border outside the 4:3 picture"
+expect "$CHECK $T/dump/flip00090.ppm 245 540 255 0 0 >/dev/null" "4:3 picture starts at x=240"
+expect "$CHECK $T/dump/flip00130.ppm 960 540 0 255 0 >/dev/null" "Cross -> SNES B -> green backdrop"
+expect "[ -f $T/root/states/test.000 ]" "L2 + Up wrote states/test.000"
+expect "grep -q 'battery save' $T/root/logs/boot.log; [ \$? = 1 ]" "no battery save for a game without SRAM"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+
+echo "== 2. shelf -> game -> back to the shelf -> quit"
+T=$(newroot t2)
+python3 tests/make_test_rom.py "$T/root/roms/Test Game (USA).sfc" ntsc >/dev/null
+mkdir -p "$T/root/roms/RPG"
+rc=$(run "$T" "0:0;40:$CROSS;42:0;150:$L3R3;152:0;160:$UP;162:0;164:$UP;166:0;170:$CROSS;172:0;200:$OPTIONS;202:0;210:$CROSS;212:0" "20,35,120,190")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "[ -f $T/dump/flip00020.ppm ]" "the shelf was shown"
+expect "$CHECK $T/dump/flip00120.ppm 960 540 255 0 0 >/dev/null" "the game picked on the shelf runs"
+expect "grep -q 'last_rom=.*Test Game (USA).sfc' $T/root/snes9x-ps5.ini" "the shelf remembers the last game"
+expect "grep -q 'loading .*Test Game' $T/root/logs/boot.log" "loaded from the shelf"
+
+echo "== 3. a 50 Hz (PAL) game paces on the audio clock"
+T=$(newroot t3)
+python3 tests/make_test_rom.py "$T/root/roms/pal.sfc" pal >/dev/null
+start=$(date +%s.%N)
+rc=$(run "$T" "0:0;300:$L3R3;302:0;310:$UP;312:0;320:$CROSS;322:0" "" "$T/root/roms/pal.sfc")
+end=$(date +%s.%N)
+secs=$(python3 -c "print(round($end - $start, 2))")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q '50 fps, PAL' $T/root/logs/boot.log" "detected as PAL"
+expect "python3 -c 'import sys; sys.exit(0 if 5.0 <= $secs <= 9.0 else 1)'" "300 frames took ${secs}s (~6 s at 50 fps)"
+
+echo "== 4. integer scale and scanlines from the settings file; load state with L2 + Down"
+T=$(newroot t4)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+printf 'aspect=2\nscanlines=1\n' >"$T/root/snes9x-ps5.ini"
+rc=$(run "$T" "0:0;60:$(printf %x $((0x$L2 | 0x$UP)));62:0;80:$(printf %x $((0x$L2 | 0x$DOWN)));82:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "50" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "$CHECK $T/dump/flip00050.ppm 445 540 0 0 0 >/dev/null" "integer 4x: black left of x=448"
+expect "$CHECK $T/dump/flip00050.ppm 450 540 255 0 0 >/dev/null" "integer 4x: picture from x=448"
+expect "$CHECK $T/dump/flip00050.ppm 960 95 127 0 0 >/dev/null" "scanline row (4th of each line) is darker"
+expect "$CHECK $T/dump/flip00050.ppm 960 93 255 0 0 >/dev/null" "other rows full brightness"
+expect "grep -q 'load state 0 .*: ok' $T/root/logs/boot.log" "L2 + Down loaded the state"
+
+echo "== 5. no ROMs: the shelf explains where to put them; OPTIONS + Cross quits, Circle doesn't"
+T=$(newroot t5)
+rc=$(run "$T" "0:0;30:$OPTIONS;32:0;40:$CIRCLE;42:0;60:$OPTIONS;62:0;70:$CROSS;72:0" "20")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "[ -f $T/dump/flip00020.ppm ]" "the empty shelf was shown"
+
+echo "== 6. a zipped ROM; 60 Hz game paced by vsync keeps the sound fed"
+T=$(newroot t6)
+python3 tests/make_test_rom.py "$T/game.sfc" ntsc >/dev/null
+python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_DEFLATED); z.write(sys.argv[2],'game.sfc'); z.close()" "$T/root/roms/game.zip" "$T/game.sfc"
+start=$(date +%s.%N)
+rc=$(SNES9X_HOST_REALTIME=1 run "$T" "0:0;300:$L3R3;302:0;310:$UP;312:0;320:$CROSS;322:0" "100" "$T/root/roms/game.zip")
+end=$(date +%s.%N)
+secs=$(python3 -c "print(round($end - $start, 2))")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "$CHECK $T/dump/flip00100.ppm 960 540 255 0 0 >/dev/null" "the zipped game runs"
+expect "python3 -c 'import sys; sys.exit(0 if 4.5 <= $secs <= 8.0 else 1)'" "300 frames at vsync took ${secs}s (~5 s at 60 Hz)"
+u60=$(grep -o 'frame 60: .*underruns [0-9]*' "$T/root/logs/boot.log" | grep -o '[0-9]*$')
+u240=$(grep -o 'frame 240: .*underruns [0-9]*' "$T/root/logs/boot.log" | grep -o '[0-9]*$')
+under=$(( ${u240:-999} - ${u60:-0} ))
+expect "[ $under -le 2 ]" "audio underruns between frames 60 and 240: $under"
+
+echo "== 7. little video memory: 720p scan-out; memory busy at first: retries"
+T=$(newroot t7)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(SNES9X_HOST_DIRECT_MAX_MIB=12 run "$T" "0:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "90" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'scan-out 1280x720' $T/root/logs/boot.log" "fell back to 1280x720"
+expect "head -2 $T/dump/flip00090.ppm | grep -q '1280 720'" "the flips are 1280x720"
+expect "$CHECK $T/dump/flip00090.ppm 640 360 255 0 0 >/dev/null" "game picture in the middle (720p)"
+expect "$CHECK $T/dump/flip00090.ppm 100 360 0 0 0 >/dev/null" "4:3 border kept (720p)"
+T=$(newroot t7b)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(SNES9X_HOST_DIRECT_FAIL_FIRST=9 run "$T" "0:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'retrying (1)' $T/root/logs/boot.log && grep -q 'scan-out 1920x1080' $T/root/logs/boot.log" "retried, then got 1080p"
+
+echo "== 8. Snes9xPS5.elf installs the app (icon and libc.prx included), stays as the helper, repairs"
+T=$(newroot t8)
+APP=$T/homebrew/PPSA99009
+inst() { # dir -> runs the installer; it stays running as the helper when the port is free
+	SNES9X_PS5_ROOT=$1/root SNES9X_PS5_HOMEBREW=$1/homebrew SNES9X_PS5_APPMETA=$1/appmeta ASAN_OPTIONS=detect_leaks=0 timeout 60 "$INSTALLER" >>"$1/inst.txt" 2>&1
+}
+waitfor() { for i in $(seq 1 50); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+stop_helpers() { pkill -f 'build/host/snes9x-ps5-(installer|helper)' 2>/dev/null; pkill -f 'received.elf' 2>/dev/null; sleep 0.3; }
+stop_helpers
+inst "$T" &
+expect "waitfor $T/root/logs/installer.log 'listening on 127.0.0.1'" "the installer stays running as the helper"
+expect "cmp -s $APP/sce_sys/icon0.png app/sce_sys/icon0.png" "icon0.png installed (the Snes9x PS5 icon)"
+expect "cmp -s $APP/sce_sys/pic0.dds app/sce_sys/pic0.dds && cmp -s $APP/sce_sys/pic1.dds app/sce_sys/pic1.dds && cmp -s $APP/sce_sys/param.json app/sce_sys/param.json" "pic0.dds/pic1.dds (background) and param.json installed"
+expect "cmp -s $APP/eboot.bin tests/fake-eboot.bin" "eboot.bin installed"
+expect "cmp -s $APP/sce_module/libc.prx tests/fake-libc.prx" "sce_module/libc.prx installed"
+expect "grep -q 'Snes9x PS5 2.0 installed. Open it from the Snes9x PS5 icon' $T/inst.txt" "install notification says to open the icon"
+expect "! ls $APP/*.part $APP/sce_sys/*.part $APP/sce_module/*.part 2>/dev/null | grep -q ." "no .part files left"
+inst "$T"
+expect "grep -q 'is up to date' $T/root/logs/installer.log && ! grep -q 'wrote' $T/root/logs/installer.log" "sent again: nothing rewritten"
+expect "grep -q 'a helper is already running' $T/root/logs/installer.log" "sent again: the second copy leaves the helper to the first"
+echo broken > $APP/sce_sys/icon0.png
+inst "$T"
+expect "cmp -s $APP/sce_sys/icon0.png app/sce_sys/icon0.png" "a damaged icon is put back"
+# ShadowMountPlus registered the title with the old art (/user/appmeta/<title>): the installer brings it up to date
+META=$T/appmeta/PPSA99009
+mkdir -p "$META" && echo old > "$META/pic0.png" && echo old > "$META/icon0.png" && cp app/sce_sys/param.json "$META/"
+echo old > "$APP/sce_sys/pic0.png"
+inst "$T"
+expect "cmp -s $META/pic0.dds app/sce_sys/pic0.dds && cmp -s $META/pic1.dds app/sce_sys/pic1.dds && cmp -s $META/icon0.png app/sce_sys/icon0.png" "appmeta gets the new background (pic0/pic1.dds) and icon"
+expect "[ ! -f $META/pic0.png ] && [ ! -f $APP/sce_sys/pic0.png ]" "the old pic0.png is removed"
+expect "grep -q 'Home screen art updated' $T/inst.txt" "the notification says the home screen art changed"
+expect "grep -q 'updated to 2.0' $T/inst.txt" "update notification"
+stop_helpers
+expect "[ \$(find $T -path '*PPSA99203*' | wc -l) = 0 ]" "nothing written for PS5SX2 (PPSA99203)"
+
+echo "== 9. covers: download, git-symlink, name by CRC, your own cover first, 404 remembered"
+T=$(newroot t9)
+SRV=$T/srv/Named_Boxarts; mkdir -p "$SRV" "$T/root/covers"
+python3 - "$SRV" "$T/root/covers" <<'PY'
+import sys
+from PIL import Image
+srv, covers = sys.argv[1], sys.argv[2]
+Image.new('RGB', (512, 357), (255, 0, 0)).save(srv + '/Super Mario World (USA).png')
+Image.new('RGB', (512, 357), (0, 255, 0)).save(srv + '/Donkey Kong Country (USA).png')
+open(srv + '/Donkey Kong Country (USA) (Rev 2).png', 'w').write('Donkey Kong Country (USA).png')
+Image.new('RGB', (512, 357), (255, 255, 0)).save(srv + '/Final Fantasy III (USA).png')
+Image.new('RGB', (360, 512), (0, 0, 255)).save(covers + '/Final Fantasy III (USA).png')
+PY
+for n in "Super Mario World (USA)" "Chrono Trigger (USA)" "Final Fantasy III (USA)"; do python3 tests/make_test_rom.py "$T/root/roms/$n.sfc" ntsc >/dev/null; done
+python3 tests/make_test_rom.py "$T/root/roms/dkc.sfc" ntsc >/dev/null
+python3 tests/forge_crc.py "$T/root/roms/dkc.sfc" $(grep -P "\tDonkey Kong Country \(USA\) \(Rev 2\)$" frontend/data/snes-nointro.tsv | cut -f1) >/dev/null
+PORT=18080
+(cd "$T/srv" && exec python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1) &
+SRVPID=$!
+sleep 1
+# shelf order: Chrono Trigger, Donkey Kong Country, Final Fantasy III, Super Mario World
+RIGHT=20
+rc=$(OFFLINE= COVER_URL="http://127.0.0.1:$PORT/Named_Boxarts/\${name}.png" SNES9X_HOST_REALTIME=1 run "$T" \
+	"0:0;180:$RIGHT;182:0;230:$RIGHT;232:0;280:$RIGHT;282:0;330:$OPTIONS;332:0;340:$CROSS;342:0" "170,220,270,320")
+kill $SRVPID 2>/dev/null
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'dkc.sfc -> \"Donkey Kong Country (USA) (Rev 2)\" (by CRC)' $T/root/logs/boot.log" "dkc.sfc named by its CRC"
+expect "[ -f '$T/root/covers/Super Mario World (USA).png' ]" "a cover was downloaded into the cache"
+expect "[ -f '$T/root/covers/Chrono Trigger (USA).missing' ]" "a 404 is remembered (.missing)"
+expect "grep -q 'is a link to Donkey Kong Country (USA).png' $T/root/logs/boot.log" "a git-symlink cover is followed"
+expect "! grep -q 'GET .*Final%20Fantasy' $T/root/logs/boot.log" "your own cover: nothing downloaded for it"
+expect "! $CHECK $T/dump/flip00170.ppm 960 420 255 0 0 >/dev/null 2>&1 && ! $CHECK $T/dump/flip00170.ppm 960 420 0 255 0 >/dev/null 2>&1" "no cover online: a placeholder card"
+expect "$CHECK $T/dump/flip00220.ppm 960 420 0 255 0 >/dev/null" "Donkey Kong Country shows the linked (green) cover"
+expect "$CHECK $T/dump/flip00270.ppm 960 420 0 0 255 >/dev/null" "Final Fantasy III shows your own (blue) cover, not the server's"
+expect "$CHECK $T/dump/flip00320.ppm 960 420 255 0 0 >/dev/null" "Super Mario World shows the downloaded (red) cover"
+
+echo "== 10. offline: no download is tried, the shelf still works"
+T=$(newroot t10)
+python3 tests/make_test_rom.py "$T/root/roms/Super Mario World (USA).sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;30:$OPTIONS;32:0;40:$CROSS;42:0" "20")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'not connected' $T/root/logs/boot.log && ! grep -q 'GET ' $T/root/logs/boot.log" "no request made without a network"
+
+echo "== 11. the pad is shared with the system (handle 0x809b0081, as on the console)"
+T=$(newroot t11)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(SNES9X_HOST_PAD_SHARED=1 SNES9X_HOST_REALTIME=1 run "$T" "0:0;100:$CROSS;140:0;300:$L3R3;302:0;310:$UP;312:0;320:$CROSS;322:0" "130" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'using 809b0081 (shared with the system)' $T/root/logs/boot.log" "the system's handle is used"
+expect "[ \$(grep -c 'scePadOpen' $T/root/logs/boot.log) = 1 ]" "opened once, not every 2 seconds"
+expect "$CHECK $T/dump/flip00130.ppm 960 540 0 255 0 >/dev/null" "its buttons reach the game (Cross -> green)"
+
+echo "== 12. the app asks the helper to let it out of the sandbox"
+T=$(newroot t12)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+QUIT="0:0;30:$L3R3;32:0;40:$UP;42:0;50:$CROSS;52:0"
+SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+HPID=$!
+waitfor "$T/hroot/logs/helper.log" "listening" || sleep 1
+rc=$(run "$T" "$QUIT" "" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'Snes9x helper (port [0-9]*): ret 0' $T/root/logs/boot.log" "the helper said yes"
+expect "grep -q 'jailbreak: Snes9x helper' $T/root/logs/boot.log" "logged before /data was open, written to boot.log"
+expect "grep -q 'letting it out' $T/hroot/logs/helper.log" "the helper let the app's process out"
+stop_helpers
+T=$(newroot t12b)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+SNES9X_HOST_JB_TITLE=PPSA99203 SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+HPID=$!
+waitfor "$T/hroot/logs/helper.log" "listening" || sleep 1
+rc=$(run "$T" "$QUIT" "" "$T/root/roms/test.sfc")
+expect "grep -q 'title PPSA99203 is not Snes9x PS5' $T/hroot/logs/helper.log" "the helper lets out no other title"
+stop_helpers
+
+echo "== 13. no helper running: the app hands its own helper to the ELF loader, then asks it"
+T=$(newroot t13)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+python3 - "$SNES9X_ELFLDR_PORT" "$T" <<'PY' &
+import os, socket, subprocess, sys
+port, t = int(sys.argv[1]), sys.argv[2]
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', port)); s.listen(1); s.settimeout(60)
+c, _ = s.accept()
+data = b''
+while True:
+    d = c.recv(65536)
+    if not d: break
+    data += d
+path = t + '/received.elf'
+open(path, 'wb').write(data); os.chmod(path, 0o755)
+env = dict(os.environ, SNES9X_PS5_ROOT=t + '/hroot', ASAN_OPTIONS='detect_leaks=0')
+p = subprocess.Popen(['timeout', '30', path], env=env, stdout=open(t + '/helper.txt', 'w'), stderr=subprocess.STDOUT)
+open(t + '/helper.pid', 'w').write(str(p.pid))
+PY
+LPID=$!
+sleep 0.5
+rc=$(run "$T" "$QUIT" "" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "cmp -s $T/received.elf $HELPER" "the ELF loader got the helper built into the app"
+expect "grep -q 'jailbreak: Snes9x helper (started by the app)' $T/root/logs/boot.log" "then the helper it started let it out"
+wait $LPID 2>/dev/null
+stop_helpers
+
+echo "== 14. no /data even so: the screen says what to do; the screen busy at first: retries"
+T=$(newroot t14)
+rm -rf "$T/root" && echo "not a folder" >"$T/root" # the app can't create its folders there
+rc=$(run "$T" "0:0;30:$CROSS;32:0" "20")
+expect "[ $rc = 2 ]" "exit code 2 (got $rc)"
+expect "grep -q 'no access to /data' $T/out.txt" "logged: no access to /data"
+expect "[ -f $T/dump/flip00020.ppm ]" "a message was on the screen"
+T=$(newroot t14b)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(SNES9X_HOST_VIDEO_BUSY=3 run "$T" "$QUIT" "" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "[ \$(grep -c 'sceVideoOutOpen -> .*80290009' $T/root/logs/boot.log) = 3 ] && grep -q 'scan-out 1920x1080' $T/root/logs/boot.log" "VideoOut busy three times, then opened"
+expect "grep -q 'splash screen hidden' $T/root/logs/boot.log" "the splash screen is hidden"
+
+echo "== 15. covers as PS5SX2: prefetched before asking for /data; new games restart the app to fetch them"
+stop_helpers
+T=$(newroot t15)
+SRV=$T/srv/Named_Boxarts; mkdir -p "$SRV" "$T/root/covers"
+python3 -c "from PIL import Image; Image.new('RGB',(512,357),(255,0,0)).save('$SRV/Super Mario World (USA).png')"
+python3 tests/make_test_rom.py "$T/root/roms/Super Mario World (USA).sfc" ntsc >/dev/null
+PORT=18081
+(cd "$T/srv" && exec python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1) &
+SRVPID=$!
+SNES9X_PS5_ROOT=$T/root ASAN_OPTIONS=detect_leaks=0 timeout 120 "$HELPER" >"$T/helper.txt" 2>&1 &
+waitfor "$T/root/logs/helper.log" "listening" || sleep 1
+URL="http://127.0.0.1:$PORT/Named_Boxarts/\${name}.png"
+SHELFQUIT="0:0;30:$OPTIONS;32:0;40:$CROSS;42:0"
+rc=$(OFFLINE= COVER_URL="$URL" run "$T" "$SHELFQUIT" "")
+expect "grep -q 'Super Mario World (USA).png' $T/root/covers/wanted.txt" "first start: the missing cover goes to covers/wanted.txt"
+expect "grep -q 'restarting .* so the prefetch gets them' $T/root/logs/boot*.log" "first start: the app restarts itself for the new cover"
+expect "[ ! -f '$T/root/covers/Super Mario World (USA).png' ]" "first start: nothing downloaded on the shelf (as PS5SX2)"
+rm -f "$T/root/covers/restart.stamp"
+rc=$(OFFLINE= COVER_URL="$URL" run "$T" "$SHELFQUIT" "")
+expect "[ $rc = 0 ]" "second start: exit code 0 (got $rc)"
+expect "cmp -s '$T/root/covers/Super Mario World (USA).png' '$SRV/Super Mario World (USA).png'" "second start: the cover was prefetched and saved"
+expect "awk '/\[prefetch\] 1 of 1 fetched/{p=NR} /\[jailbreak\] pid/{j=NR} END{exit !(p && j && p<j)}' $T/root/logs/boot.log" "the download happened before the request for /data"
+expect "! grep -q 'restarting' $T/root/logs/boot.log" "second start: no restart (nothing new)"
+expect "[ ! -s $T/root/covers/wanted.txt ]" "second start: the wanted list is empty"
+kill $SRVPID 2>/dev/null
+stop_helpers
+
+echo
+echo "passed $PASS, failed $FAIL  (work dir $WORK)"
+[ $FAIL = 0 ]

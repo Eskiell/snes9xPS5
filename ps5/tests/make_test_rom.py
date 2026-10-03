@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Builds a tiny 32 KiB LoROM for the host tests (no game data needed).
+
+The ROM turns the screen on with backdrop colour red; while SNES button B is held (read through the
+auto-joypad registers in the NMI handler) the backdrop is green. So a de-tiled flip shows whether the
+whole chain works: CPU, PPU, the port's scaler and tiler, and the pad -> Snes9x input mapping.
+
+    make_test_rom.py out.sfc [ntsc|pal]
+"""
+import struct
+import sys
+
+out = sys.argv[1]
+region = sys.argv[2] if len(sys.argv) > 2 else "ntsc"
+
+rom = bytearray([0xFF] * 0x8000)
+
+reset = bytes([
+    0x78,                    # SEI
+    0x18, 0xFB,              # CLC; XCE        native mode
+    0xA9, 0x8F, 0x8D, 0x00, 0x21,  # LDA #$8F; STA $2100  forced blank
+    0x9C, 0x21, 0x21,        # STZ $2121       CGRAM address 0
+    0xA9, 0x1F, 0x8D, 0x22, 0x21,  # LDA #$1F; STA $2122  red (BGR555 0x001F), low byte
+    0x9C, 0x22, 0x21,        # STZ $2122       high byte
+    0xA9, 0x0F, 0x8D, 0x00, 0x21,  # LDA #$0F; STA $2100  screen on, full brightness
+    0xA9, 0x81, 0x8D, 0x00, 0x42,  # LDA #$81; STA $4200  NMI + auto joypad read
+    0xCB,                    # loop: WAI
+    0x80, 0xFD,              # BRA loop
+])
+nmi = bytes([
+    0x48,                    # PHA
+    0xAD, 0x10, 0x42,        # LDA $4210       acknowledge NMI
+    0xAD, 0x19, 0x42,        # LDA $4219       joypad 1 high byte: B Y Sel Start U D L R
+    0x29, 0x80,              # AND #$80        B
+    0xF0, 0x0F,              # BEQ red
+    0x9C, 0x21, 0x21,        # STZ $2121
+    0xA9, 0xE0, 0x8D, 0x22, 0x21,  # green 0x03E0
+    0xA9, 0x03, 0x8D, 0x22, 0x21,
+    0x68, 0x40,              # PLA; RTI
+    0x9C, 0x21, 0x21,        # red: STZ $2121
+    0xA9, 0x1F, 0x8D, 0x22, 0x21,
+    0x9C, 0x22, 0x21,
+    0x68, 0x40,              # PLA; RTI
+])
+rom[0x0000:0x0000 + len(reset)] = reset
+rom[0x0100:0x0100 + len(nmi)] = nmi
+
+# header at $FFC0 (file offset 0x7FC0)
+title = b"SNES9X PS5 TEST".ljust(21, b" ")
+rom[0x7FC0:0x7FD5] = title
+rom[0x7FD5] = 0x20          # LoROM, slow
+rom[0x7FD6] = 0x00          # ROM only
+rom[0x7FD7] = 0x05          # 32 KiB
+rom[0x7FD8] = 0x00          # no SRAM
+rom[0x7FD9] = 0x01 if region == "ntsc" else 0x02  # USA / Europe
+rom[0x7FDA] = 0x00
+rom[0x7FDB] = 0x00
+# vectors: native NMI $FFEA, emulation RESET $FFFC
+struct.pack_into("<H", rom, 0x7FEA, 0x8100)
+struct.pack_into("<H", rom, 0x7FFA, 0x8100)
+struct.pack_into("<H", rom, 0x7FFC, 0x8000)
+# checksum
+struct.pack_into("<HH", rom, 0x7FDC, 0xFFFF, 0x0000)
+csum = sum(rom) & 0xFFFF
+struct.pack_into("<HH", rom, 0x7FDC, csum ^ 0xFFFF, csum)
+
+with open(out, "wb") as f:
+    f.write(rom)
+print(f"wrote {out} ({region})")

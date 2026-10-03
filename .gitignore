@@ -1,0 +1,5 @@
+# Snes9x PS5 build outputs
+ps5/build/
+ps5/proto/native/build/
+*.o
+*.part
