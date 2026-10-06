@@ -7,6 +7,8 @@ building) is in **[ps5/README.md](ps5/README.md)**. Port by [github.com/MisterTe
 The home screen (the 3D game shelf with automatic covers) and the app's design are based on the idea of
 [PS5SX2](https://github.com/Swordpdf/PS5SX2), the PCSX2 port for the PS5.
 
+Inside Emulator to access main menu press L3 + R3
+
 The rest of this repository is the original Snes9x source; its README follows.
 
 ---
