@@ -161,6 +161,7 @@ bool ServeHelper(void (*on_ready)())
 			usleep(200 * 1000);
 			continue;
 		}
+		OrbisLogRefresh(); // the "Debug logs" setting may have changed since the helper started
 		timeval tv = {5, 0};
 		setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 		setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));

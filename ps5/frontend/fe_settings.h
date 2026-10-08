@@ -17,6 +17,7 @@ struct Settings
 	bool transparency = true; // Snes9x "Transparency"
 	int superfx_clock = 100; // % (Snes9x SuperFXClockMultiplier)
 	bool covers_download = true; // fetch box art from libretro-thumbnails
+	bool debug_logs = true;      // boot.log and the others in /data/snes9x/logs (OrbisLogSetEnabled)
 	std::string last_dir; // the browser reopens here
 	std::string last_rom; // and puts the cursor on this file
 

@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 BIN=$PWD/build/host/snes9x-ps5-host
 INSTALLER=$PWD/build/host/snes9x-ps5-installer
 HELPER=$PWD/build/host/snes9x-ps5-helper
+VER=$(sed -n 's/^VERSION ?= //p' Makefile) # the release the binaries say they are
 # ports nobody listens on, so the app's ordinary runs find no helper and no ELF loader
 export SNES9X_HELPER_PORT=$((20000 + RANDOM % 10000)) SNES9X_ELFLDR_PORT=$((30000 + RANDOM % 10000)) SNES9X_JB_NO_OTHERS=1
 CHECK="python3 $PWD/tests/check_ppm.py"
@@ -136,7 +137,7 @@ expect "cmp -s $APP/sce_sys/icon0.png app/sce_sys/icon0.png" "icon0.png installe
 expect "cmp -s $APP/sce_sys/pic0.dds app/sce_sys/pic0.dds && cmp -s $APP/sce_sys/pic1.dds app/sce_sys/pic1.dds && cmp -s $APP/sce_sys/param.json app/sce_sys/param.json" "pic0.dds/pic1.dds (background) and param.json installed"
 expect "cmp -s $APP/eboot.bin tests/fake-eboot.bin" "eboot.bin installed"
 expect "cmp -s $APP/sce_module/libc.prx tests/fake-libc.prx" "sce_module/libc.prx installed"
-expect "grep -q 'Snes9x PS5 2.0 installed. Open it from the Snes9x PS5 icon' $T/inst.txt" "install notification says to open the icon"
+expect "grep -q 'Snes9x PS5 $VER installed. Open it from the Snes9x PS5 icon' $T/inst.txt" "install notification says to open the icon"
 expect "! ls $APP/*.part $APP/sce_sys/*.part $APP/sce_module/*.part 2>/dev/null | grep -q ." "no .part files left"
 inst "$T"
 expect "grep -q 'is up to date' $T/root/logs/installer.log && ! grep -q 'wrote' $T/root/logs/installer.log" "sent again: nothing rewritten"
@@ -152,7 +153,7 @@ inst "$T"
 expect "cmp -s $META/pic0.dds app/sce_sys/pic0.dds && cmp -s $META/pic1.dds app/sce_sys/pic1.dds && cmp -s $META/icon0.png app/sce_sys/icon0.png" "appmeta gets the new background (pic0/pic1.dds) and icon"
 expect "[ ! -f $META/pic0.png ] && [ ! -f $APP/sce_sys/pic0.png ]" "the old pic0.png is removed"
 expect "grep -q 'Home screen art updated' $T/inst.txt" "the notification says the home screen art changed"
-expect "grep -q 'updated to 2.0' $T/inst.txt" "update notification"
+expect "grep -q 'updated to $VER' $T/inst.txt" "update notification"
 stop_helpers
 expect "[ \$(find $T -path '*PPSA99203*' | wc -l) = 0 ]" "nothing written for PS5SX2 (PPSA99203)"
 
@@ -373,6 +374,46 @@ mkdir -p "$T/root/roms/Sub"
 python3 tests/make_test_rom.py "$T/root/roms/Sub/Msu Test.sfc" msu >/dev/null
 n=$(msu_run "$T")
 expect "[ \"${n:-1}\" -eq 0 ]" "without the MSU-1 files the same ROM is silent (${n:-?} non-zero samples)"
+
+echo "== 18. debug logs off: nothing written (app and helper), earlier logs kept; the setting switches them at once"
+TRIANGLE=1000
+SHELFQUIT_AT() { echo "$1:$OPTIONS;$(($1 + 2)):0;$(($1 + 10)):$CROSS;$(($1 + 12)):0"; }
+T=$(newroot t18)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+echo "debug_logs=0" >>"$T/root/snes9x-ps5.ini"
+mkdir -p "$T/root/logs" && echo "OLD RUN" >"$T/root/logs/boot.log"
+rc=$(run "$T" "0:0;100:$L3R3;105:0;120:$UP;122:0;130:$CROSS;132:0" "90" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "$CHECK $T/dump/flip00090.ppm 960 540 255 0 0 >/dev/null" "the game runs"
+expect "[ \"\$(cat $T/root/logs/boot.log)\" = 'OLD RUN' ] && [ ! -e $T/root/logs/boot.prev.log ]" "the earlier boot.log is kept as it was, nothing new written"
+expect "! grep -q '^\[snes9x-ps5' $T/out.txt" "nothing on stdout either"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+# Settings (Triangle) -> Debug logs (Up twice from Shader: Back, then Debug logs) -> Off: that line is the last one
+T=$(newroot t18b)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;30:$TRIANGLE;32:0;50:$UP;52:0;60:$UP;62:0;70:$CROSS;72:0;90:$CIRCLE;92:0;$(SHELFQUIT_AT 120)" "")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q '^debug_logs=0' $T/root/snes9x-ps5.ini" "Debug logs Off saved"
+expect "tail -1 $T/root/logs/boot.log | grep -q 'debug logs turned off'" "the last line of boot.log says the logs were turned off"
+# and back on: logging starts again in the same boot.log
+T=$(newroot t18c)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+echo "debug_logs=0" >>"$T/root/snes9x-ps5.ini"
+rc=$(run "$T" "0:0;30:$TRIANGLE;32:0;50:$UP;52:0;60:$UP;62:0;70:$CROSS;72:0;90:$CIRCLE;92:0;$(SHELFQUIT_AT 120)" "")
+expect "grep -q '^debug_logs=1' $T/root/snes9x-ps5.ini" "Debug logs On saved"
+expect "head -1 $T/root/logs/boot.log | grep -q 'debug logs turned on'" "boot.log starts at the switch (nothing from before it)"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+# the helper follows the setting too
+stop_helpers
+T=$(newroot t18d)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+mkdir -p "$T/hroot" && echo "debug_logs=0" >"$T/hroot/snes9x-ps5.ini"
+SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+sleep 1.5
+rc=$(run "$T" "0:0;30:$L3R3;32:0;40:$UP;42:0;50:$CROSS;52:0" "" "$T/root/roms/test.sfc")
+expect "grep -q 'Snes9x helper (port [0-9]*): ret 0' $T/root/logs/boot.log" "the helper still lets the app out"
+expect "[ ! -e $T/hroot/logs/helper.log ] && ! grep -q 'helper\]' $T/helper.txt" "with debug logs off the helper writes no log"
+stop_helpers
 
 echo
 echo "passed $PASS, failed $FAIL  (work dir $WORK)"

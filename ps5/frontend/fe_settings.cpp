@@ -65,6 +65,8 @@ void Settings::Load()
 			superfx_clock = Clamp(atoi(val), 50, 400);
 		else if (key == "covers_download")
 			covers_download = atoi(val) != 0;
+		else if (key == "debug_logs")
+			debug_logs = atoi(val) != 0;
 		else if (key == "last_dir")
 			last_dir = val;
 		else if (key == "last_rom")
@@ -93,6 +95,7 @@ void Settings::Save() const
 	fprintf(f, "transparency=%d\n", transparency ? 1 : 0);
 	fprintf(f, "superfx_clock=%d\n", superfx_clock);
 	fprintf(f, "covers_download=%d\n", covers_download ? 1 : 0);
+	fprintf(f, "debug_logs=%d\n", debug_logs ? 1 : 0);
 	fprintf(f, "last_dir=%s\n", last_dir.c_str());
 	fprintf(f, "last_rom=%s\n", last_rom.c_str());
 	fclose(f);

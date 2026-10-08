@@ -11,7 +11,7 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 Everything outside `ps5/` is the original Snes9x source, unchanged.
 
 > **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 125 host tests, which run the same code
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 138 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -45,7 +45,7 @@ Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `sn
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
 
 **2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)); MSU-1 documented and
-tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)). **2.0:** Snes9x as a native
+tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)); a setting to turn the debug logs off. **2.0:** Snes9x as a native
 home-screen app.
 
 ## Language
@@ -154,6 +154,35 @@ author's line with the GitHub mark: **github.com/MisterTemaki** (PS5SX2 shows it
   takes priority over downloads.
 - **No cover:** the game gets a card with its title.
 - **Turning downloads off:** Settings, "Download covers".
+
+### Downloading all the covers yourself
+
+To fill the shelf without the console downloading anything (an offline PS5, or a big library), download the whole
+SNES cover set from [libretro-thumbnails](https://github.com/libretro-thumbnails) on a PC:
+
+| | Link |
+|---|---|
+| All SNES covers at once (zip) | [master.zip](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/archive/refs/heads/master.zip) |
+| Browse them | [Named_Boxarts](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/tree/master/Named_Boxarts) |
+| Copy the images to | `/data/snes9x/covers/` |
+
+1. Download the zip and unpack it on the PC. The covers are in its **`Named_Boxarts`** folder (the zip also has
+   title screens and in-game shots: they are not used).
+2. Copy the `.png` files from `Named_Boxarts` (not the folder itself) to `/data/snes9x/covers/`, over FTP for
+   example. Copying only the covers of the games you have saves space: the zip is large.
+3. Open the app: games recognised by name or CRC pick their cover up at once, and nothing is downloaded for them.
+
+Notes:
+
+- The files keep their official names (`Super Mario World (USA).png`); the app looks for exactly that name, with
+  the characters `` & * / : ` < > ? \ | " `` replaced by `_` as in the repository. `boot.log` lists the name it
+  found for each game (`[games] ... -> "<name>"`).
+- A few `.png` files in the repository are git links: a small text file holding the name of another cover. In the
+  zip they may come out as text, not images; copy the cover they name under that file's name instead.
+- One cover: `https://raw.githubusercontent.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/master/Named_Boxarts/<name>.png`
+  (spaces as `%20`).
+- A cover named after the ROM file (`covers/Mario.png` for `roms/Mario.sfc`) is used before any other, for games
+  the app doesn't recognise or to use another picture.
 
 **How it is drawn:** PS5SX2 draws its shelf on the GPU with the Vulkan driver of a private ps5vk fork. Without
 that driver Snes9x PS5 draws the shelf on the CPU, still in real 3D perspective:
@@ -289,6 +318,14 @@ Good to know:
 
 ## Debugging (logs and crashes)
 
+**Turning the logs on or off:** Settings (Triangle on the shelf, or L3 + R3 in a game) -> **Debug logs** (the last
+row; On by default). Off stops every log at once: the app writes nothing more to `boot.log` (its last line says
+the logs were turned off) or to the console output, and the next starts -- the app, the installer and the helper --
+write no log files at all; the files of earlier runs are left as they are (delete them over FTP if you want). On
+starts again at once, adding to `boot.log`. The setting is `debug_logs=0` / `debug_logs=1` in `snes9x-ps5.ini`.
+Leave them on if you want to report a problem: with them off there is no log to send, and no `== CRASH ==` report
+either.
+
 If something fails, send the files in `/data/snes9x/logs/`: `boot.log` (the app), `installer.log` and
 `helper.log`, plus the previous session's `.prev.log` files. They record every step:
 
@@ -319,7 +356,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 125 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 138 tests (ASan/UBSan)
 ```
 
 The build has three stages:
