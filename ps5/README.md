@@ -11,7 +11,7 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 Everything outside `ps5/` is the original Snes9x source, unchanged.
 
 > **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 120 host tests, which run the same code
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 125 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -44,7 +44,8 @@ Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `sn
 (`make dist`). When updating, replace the old ELF with the new one in your autoload or Payload Manager. In this
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
 
-**2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)). **2.0:** Snes9x as a native
+**2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)); MSU-1 documented and
+tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)). **2.0:** Snes9x as a native
 home-screen app.
 
 ## Language
@@ -244,6 +245,38 @@ picture size. The work is shared by up to six threads. `boot.log` says how long 
 game slow down -- hi-res games (512 pixels wide) cost more -- pick a lighter one. Licence notices are in
 `ps5/THIRD_PARTY_SHADERS.md`.
 
+## MSU-1 (CD-quality music in SNES games)
+
+Snes9x plays games patched for the **MSU-1**, the add-on of the SD2SNES / FXPAK flash carts that streams
+CD-quality music (and, in some patches, video data) from files next to the ROM. Many hacks use it to replace a
+game's soundtrack (Zelda: A Link to the Past, Super Metroid, Chrono Trigger, Final Fantasy...).
+
+**How to use it**
+
+1. Put the patched ROM and its MSU-1 files **in the same folder**, all with **the same name** as the ROM:
+   ```
+   /data/snes9x/roms/Zelda MSU/
+     Zelda MSU.sfc        <- the ROM with the MSU-1 patch: start this one
+     Zelda MSU.msu        <- the MSU-1 data file (it may be empty, but it must be there)
+     Zelda MSU-1.pcm      <- the music tracks: -1, -2, -3...
+     Zelda MSU-2.pcm
+   ```
+   Or put everything in one zip renamed to **`Zelda MSU.msu1`**, next to the ROM (a "pack"; the files inside keep
+   their `.msu` / `-N.pcm` endings).
+2. Start the ROM from the shelf as usual. The `.msu` and `.pcm` files are not listed as games.
+
+Good to know:
+
+- The ROM must be the **MSU-1 patched** one: the original ROM plays its own music even with the tracks beside it.
+- The names must match exactly, capitals included (the PS5's file system tells them apart). The usual mistake is a
+  ROM renamed after the tracks were made: rename the `.msu` and the `.pcm` files to match it.
+- The tracks are 44.1 kHz 16-bit stereo `.pcm` files with an `MSU1` header, as every MSU-1 pack ships them; the
+  music is mixed into the game's sound and follows the same output.
+- An MSU-1 ROM can be on a USB drive as well (`snes9x/roms/...`), as long as its files are in its folder. Keep the
+  ROM itself unzipped (a zipped ROM with MSU-1 files beside it has not been tried).
+- The host tests play an MSU-1 track from a test ROM through to the console's sound output (files beside the ROM
+  and a `.msu1` pack); it has not yet been tried with a real MSU-1 hack on a console.
+
 ## Picture and sound
 
 - 1920x1080 output through `libSceVideoOut`, flipping on vsync. With little video memory it falls back to
@@ -286,7 +319,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 120 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 125 tests (ASan/UBSan)
 ```
 
 The build has three stages:

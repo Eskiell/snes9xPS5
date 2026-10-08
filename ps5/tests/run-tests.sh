@@ -343,6 +343,37 @@ expect "[ $rc = 0 ] && grep -q '^shader=1$' $T/root/snes9x-ps5.ini" "the pause m
 expect "grep -q 'shader CRT Easymode style' $T/root/logs/boot.log && [ \$(grep -c '\[video\] picture' $T/root/logs/boot.log) -le 4 ]" "the game is drawn through it; the menu doesn't flood boot.log"
 expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
 
+echo "== 17. MSU-1: a patched ROM plays its CD-quality track (files beside it, or a .msu1 pack); without them, silence"
+msu_pcm() { python3 -c "
+import struct,sys
+pcm=b''.join(struct.pack('<hh',v,v) for v in (4000 if (i//50)%2 else -4000 for i in range(44100)))
+open(sys.argv[1],'wb').write(b'MSU1'+struct.pack('<I',0)+pcm)" "$1"; }
+msu_run() { # dir -> the last "non-zero samples" count of the host's audio output
+	SNES9X_HOST_AUDIO_STATS=1 run "$1" "0:0;300:$L3R3;305:0;320:$UP;322:0;330:$CROSS;332:0" "" "$1/root/roms/Sub/Msu Test.sfc" >/dev/null
+	grep '\[host\] audio' "$1/out.txt" | tail -1 | sed 's/.*played, \([0-9]*\) non-zero.*/\1/'
+}
+T=$(newroot t17)
+mkdir -p "$T/root/roms/Sub"
+python3 tests/make_test_rom.py "$T/root/roms/Sub/Msu Test.sfc" msu >/dev/null
+: >"$T/root/roms/Sub/Msu Test.msu"
+msu_pcm "$T/root/roms/Sub/Msu Test-1.pcm"
+n=$(msu_run "$T")
+expect "grep -q 'Using msu file .*/roms/Sub/Msu Test.msu' $T/out.txt" "the .msu beside the ROM (in a subfolder, a name with a space) is found"
+expect "[ \"${n:-0}\" -gt 100000 ]" "track 1 reaches the console's audio output (${n:-0} non-zero samples)"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+T=$(newroot t17z)
+mkdir -p "$T/root/roms/Sub"
+python3 tests/make_test_rom.py "$T/root/roms/Sub/Msu Test.sfc" msu >/dev/null
+msu_pcm "$T/track.pcm"
+python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],'w'); z.writestr('Msu Test.msu',b''); z.write(sys.argv[2],'Msu Test-1.pcm'); z.close()" "$T/root/roms/Sub/Msu Test.msu1" "$T/track.pcm"
+n=$(msu_run "$T")
+expect "[ \"${n:-0}\" -gt 100000 ]" "a .msu1 pack (zip) beside the ROM plays too (${n:-0} non-zero samples)"
+T=$(newroot t17n)
+mkdir -p "$T/root/roms/Sub"
+python3 tests/make_test_rom.py "$T/root/roms/Sub/Msu Test.sfc" msu >/dev/null
+n=$(msu_run "$T")
+expect "[ \"${n:-1}\" -eq 0 ]" "without the MSU-1 files the same ROM is silent (${n:-?} non-zero samples)"
+
 echo
 echo "passed $PASS, failed $FAIL  (work dir $WORK)"
 [ $FAIL = 0 ]

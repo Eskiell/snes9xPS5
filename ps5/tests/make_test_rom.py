@@ -5,13 +5,19 @@ The ROM turns the screen on with backdrop colour red; while SNES button B is hel
 auto-joypad registers in the NMI handler) the backdrop is green. So a de-tiled flip shows whether the
 whole chain works: CPU, PPU, the port's scaler and tiler, and the pad -> Snes9x input mapping.
 
-    make_test_rom.py out.sfc [ntsc|pal]
+    make_test_rom.py out.sfc [ntsc|pal|msu]
+
+msu: an NTSC ROM that also starts MSU-1 track 1 at full volume, playing and repeating (write $2004/$2005 =
+track 1, $2006 = volume $FF, $2007 = play + repeat), as an MSU-1 patched game does.
 """
 import struct
 import sys
 
 out = sys.argv[1]
 region = sys.argv[2] if len(sys.argv) > 2 else "ntsc"
+msu = region == "msu"
+if msu:
+    region = "ntsc"
 
 rom = bytearray([0xFF] * 0x8000)
 
@@ -23,6 +29,12 @@ reset = bytes([
     0xA9, 0x1F, 0x8D, 0x22, 0x21,  # LDA #$1F; STA $2122  red (BGR555 0x001F), low byte
     0x9C, 0x22, 0x21,        # STZ $2122       high byte
     0xA9, 0x0F, 0x8D, 0x00, 0x21,  # LDA #$0F; STA $2100  screen on, full brightness
+]) + (bytes([
+    0xA9, 0x01, 0x8D, 0x04, 0x20,  # LDA #$01; STA $2004  MSU-1 track, low byte
+    0x9C, 0x05, 0x20,        # STZ $2005       high byte: loads track 1
+    0xA9, 0xFF, 0x8D, 0x06, 0x20,  # LDA #$FF; STA $2006  volume
+    0xA9, 0x03, 0x8D, 0x07, 0x20,  # LDA #$03; STA $2007  play + repeat
+]) if msu else b"") + bytes([
     0xA9, 0x81, 0x8D, 0x00, 0x42,  # LDA #$81; STA $4200  NMI + auto joypad read
     0xCB,                    # loop: WAI
     0x80, 0xFD,              # BRA loop
