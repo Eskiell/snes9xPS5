@@ -34,4 +34,6 @@ void Osd(const char* fmt, ...) __attribute__((format(printf, 1, 2))); // message
 
 // Redraws the last frame into the surface (the pause menu draws over it).
 void RedrawLastFrame();
+// The pause menu closed: the buttons still held (Cross, Circle, L3 + R3) don't reach the game until let go.
+void AfterMenu();
 } // namespace emu

@@ -11,7 +11,7 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 Everything outside `ps5/` is the original Snes9x source, unchanged.
 
 > **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 141 host tests, which run the same code
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 162 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -45,7 +45,8 @@ Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `sn
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
 
 **2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)) and ScaleFX + rAA + AA style; MSU-1 documented and
-tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)); a setting to turn the debug logs off. **2.0:** Snes9x as a native
+tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)); a setting to turn the debug logs off; the fixes of a full code audit (helper, crash-safe saves and states, covers,
+library, 720p). **2.0:** Snes9x as a native
 home-screen app.
 
 ## Language
@@ -85,8 +86,8 @@ the helper is already running only installs and exits.
 | Folder | Contents |
 |---|---|
 | `/data/snes9x/roms` | your games |
-| `/data/snes9x/saves` | battery saves (`.srm`), written 3 s after the game saves and on exit |
-| `/data/snes9x/states` | save states (`.000` to `.009`) |
+| `/data/snes9x/saves` | battery saves (`.srm`), written 3 s after the game saves and on exit; each write goes to a `.part` file that replaces the old save only once it is complete and on disk, so a power cut or a full disk never leaves a broken save |
+| `/data/snes9x/states` | save states (`.000` to `.009`), written the same way: a failed save leaves the slot's old state |
 | `/data/snes9x/cheats` | cheats (`.cht`, Snes9x format), loaded with the game |
 | `/data/snes9x/patches` | IPS/UPS/BPS patches named after the ROM |
 | `/data/snes9x/bios` | `BS-X.bin`, `STBIOS.bin` (Satellaview, Sufami Turbo) |
@@ -160,8 +161,10 @@ author's line with the GitHub mark: **github.com/MisterTemaki** (PS5SX2 shows it
 Covers to download by hand (a zip with every cover of the system) -- **Snes9x PS5: copy them to
 `/data/snes9x/covers/`**:
 
-- **SNES:** https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/archive/refs/heads/master.zip
-  (to browse them first: [Named_Boxarts](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/tree/master/Named_Boxarts))
+- **SNES, all at once (zip):** https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/archive/refs/heads/master.zip
+- **SNES, one by one:** the covers can also be downloaded by hand from
+  https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/tree/master/Named_Boxarts
+  (open a cover, then "Download raw file").
 
 How to use it:
 
@@ -203,7 +206,7 @@ On the test PC a frame takes about 15 ms on 2 cores.
 | L1 / R1 | skip 10 games |
 | Cross | play |
 | Triangle | settings |
-| Square | download this game's cover again |
+| Square | download this game's cover again (the cover it has stays until the new one has arrived) |
 | OPTIONS | quit Snes9x (asks first) |
 
 **In a game** (buttons by position, as on the SNES pad)
@@ -366,7 +369,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 141 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 162 tests (ASan/UBSan)
 ```
 
 The build has three stages:

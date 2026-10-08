@@ -274,6 +274,8 @@ int32_t sceAudioOutInit(void)
 }
 int32_t sceAudioOutOpen(int32_t, int32_t, int32_t, uint32_t, uint32_t, uint32_t)
 {
+	if (getenv("SNES9X_HOST_AUDIO_FAIL")) // a console whose sound output can't be opened
+		return int32_t(0x80260005u);
 	return 7;
 }
 int32_t sceAudioOutOutput(int32_t, const void* p)

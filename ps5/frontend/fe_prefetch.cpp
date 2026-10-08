@@ -32,6 +32,7 @@ double Now()
 bool SafeName(const std::string& f)
 {
 	return !f.empty() && f.size() < 250 && f.find('/') == std::string::npos && f.find("..") == std::string::npos &&
+		   f.find('\\') == std::string::npos && f.find('\0') == std::string::npos &&
 		   f.size() > 4 && f.compare(f.size() - 4, 4, ".png") == 0;
 }
 
@@ -41,8 +42,10 @@ bool WriteAtomic(const std::string& path, const std::vector<uint8_t>& data)
 	FILE* f = fopen(tmp.c_str(), "wb");
 	if (!f)
 		return false;
-	const bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
-	fclose(f);
+	bool ok = fwrite(data.data(), 1, data.size(), f) == data.size();
+	ok = fflush(f) == 0 && ok;
+	ok = fsync(fileno(f)) == 0 && ok;
+	ok = fclose(f) == 0 && ok;
 	if (!ok || rename(tmp.c_str(), path.c_str()) != 0)
 	{
 		unlink(tmp.c_str());
@@ -99,10 +102,16 @@ void CoversRestartIfNeeded(const std::vector<GameInfo>& games, bool downloads_on
 			return;
 		}
 	}
-	if (FILE* f = fopen(stamp.c_str(), "w"))
 	{
-		fprintf(f, "%lld\n", (long long)now);
-		fclose(f);
+		// the stamp is the loop guard: when it can't be written, don't restart (it could not stop the next one)
+		FILE* f = fopen(stamp.c_str(), "w");
+		bool ok = f && fprintf(f, "%lld\n", (long long)now) > 0;
+		ok = f && fclose(f) == 0 && ok;
+		if (!ok)
+		{
+			OrbisLog("[covers] can't write %s: not restarting", stamp.c_str());
+			return;
+		}
 	}
 	const char* path = "/data/homebrew/" SNES9X_TITLE_ID "/eboot.bin";
 	if (access(path, F_OK) != 0)
@@ -143,9 +152,9 @@ PrefetchResult PrefetchCovers(double budget_s)
 	size_t start = 0;
 	while (start < text.size())
 	{
-		size_t end = text.find('\n', start);
+		const size_t end = text.find('\n', start);
 		if (end == std::string::npos)
-			end = text.size();
+			break; // a last line without its end could be cut: skip it
 		const std::string line = text.substr(start, end - start);
 		start = end + 1;
 		const size_t tab = line.find('\t');
@@ -167,6 +176,7 @@ PrefetchResult PrefetchCovers(double budget_s)
 		ProsperoNotify("Snes9x PS5: downloading %d covers...", int(wanted.size()));
 
 	Http http;
+	http.SetDeadline(t0 + budget_s); // a slow server can't hold the start past the budget: one GET retries for up to a minute
 	int saved = 0;
 	for (const WantedCover& w : wanted)
 	{
@@ -211,13 +221,17 @@ void SavePrefetched(const PrefetchResult& result)
 		if (it.status == 200 && !it.data.empty())
 		{
 			if (WriteAtomic(path, it.data))
+			{
 				saved++;
+				unlink((path.substr(0, path.size() - 4) + ".refetch").c_str()); // Square's request is done
+			}
 			else
 				OrbisLog("[prefetch] can't write %s", path.c_str());
 		}
 		else if (it.status == 404)
 		{
-			// as the shelf does: no new try for 30 days (Square on the shelf asks again)
+			// as the shelf does: no new try for 30 days (Square on the shelf asks again); a cover already there stays
+			unlink((path.substr(0, path.size() - 4) + ".refetch").c_str());
 			const std::string marker = path.substr(0, path.size() - 4) + ".missing";
 			if (FILE* f = fopen(marker.c_str(), "w"))
 			{

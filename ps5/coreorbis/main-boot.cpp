@@ -75,6 +75,7 @@ bool PlayGame(const std::string& rom)
 				switch (fe::PauseMenu())
 				{
 					case fe::PauseAction::Resume:
+						emu::AfterMenu();
 						ps5video::FillRect(0, 0, ps5video::kWidth, ps5video::kHeight, ps5video::Rgb(0, 0, 0));
 						ps5video::InvalidateSnes();
 						break;

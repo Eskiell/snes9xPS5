@@ -72,6 +72,14 @@ secs=$(python3 -c "print(round($end - $start, 2))")
 expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
 expect "grep -q '50 fps, PAL' $T/root/logs/boot.log" "detected as PAL"
 expect "python3 -c 'import sys; sys.exit(0 if 5.0 <= $secs <= 9.0 else 1)'" "300 frames took ${secs}s (~6 s at 50 fps)"
+# no sound output (sceAudioOutOpen refused): the PAL game is paced by the clock, not left to run flat out
+T=$(newroot t3b)
+python3 tests/make_test_rom.py "$T/root/roms/pal.sfc" pal >/dev/null
+start=$(date +%s.%N)
+rc=$(SNES9X_HOST_AUDIO_FAIL=1 run "$T" "0:0;300:$L3R3;302:0;310:$UP;312:0;320:$CROSS;322:0" "" "$T/root/roms/pal.sfc")
+end=$(date +%s.%N)
+secs=$(python3 -c "print(round($end - $start, 2))")
+expect "[ $rc = 0 ] && python3 -c 'import sys; sys.exit(0 if 5.0 <= $secs <= 9.0 else 1)'" "without sound output, 300 PAL frames still took ${secs}s (~6 s at 50 fps)"
 
 echo "== 4. integer scale and scanlines from the settings file; load state with L2 + Down"
 T=$(newroot t4)
@@ -416,6 +424,139 @@ rc=$(run "$T" "0:0;30:$L3R3;32:0;40:$UP;42:0;50:$CROSS;52:0" "" "$T/root/roms/te
 expect "grep -q 'Snes9x helper (port [0-9]*): ret 0' $T/root/logs/boot.log" "the helper still lets the app out"
 expect "[ ! -e $T/hroot/logs/helper.log ] && ! grep -q 'helper\]' $T/helper.txt" "with debug logs off the helper writes no log"
 stop_helpers
+
+echo "== 19. audit: the helper refuses unknown titles and slow clients; saves and states survive a failed write;"
+echo "       Resume doesn't press B; odd library files; 720p edges; Square never loses a cover"
+SQUARE=8000; RIGHT=20
+waitfor() { for i in $(seq 1 50); do grep -q "$2" "$1" 2>/dev/null && return 0; sleep 0.1; done; return 1; }
+stop_helpers() { pkill -f 'build/host/snes9x-ps5-(installer|helper)' 2>/dev/null; pkill -f 'received.elf' 2>/dev/null; sleep 0.3; }
+stop_helpers
+# a process whose title can't be read is not let out (fail closed)
+T=$(newroot t19)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+SNES9X_HOST_JB_TITLE= SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+waitfor "$T/hroot/logs/helper.log" "listening" || sleep 1
+rc=$(run "$T" "0:0;30:$L3R3;32:0;40:$UP;42:0;50:$CROSS;52:0" "" "$T/root/roms/test.sfc")
+expect "grep -q 'title unknown: not Snes9x PS5' $T/hroot/logs/helper.log && ! grep -q 'letting it out' $T/hroot/logs/helper.log" "a process of unknown title is refused (fail closed)"
+stop_helpers
+# a client sending one byte a second doesn't hold the helper
+T=$(newroot t19b)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+waitfor "$T/hroot/logs/helper.log" "listening" || sleep 1
+python3 - "$SNES9X_HELPER_PORT" <<'PY' &
+import socket, sys, time
+s = socket.create_connection(('127.0.0.1', int(sys.argv[1])))
+try:
+    for i in range(20):
+        s.send(b'x'); time.sleep(1)
+except OSError:
+    pass
+PY
+DRIP=$!
+sleep 0.5
+start=$(date +%s)
+rc=$(run "$T" "0:0;30:$L3R3;32:0;40:$UP;42:0;50:$CROSS;52:0" "" "$T/root/roms/test.sfc")
+secs=$(( $(date +%s) - start ))
+expect "grep -q 'Snes9x helper (port [0-9]*): ret 0' $T/root/logs/boot.log && [ $secs -lt 15 ]" "with a slow client connected, the app is still let out at once (${secs}s)"
+kill $DRIP 2>/dev/null
+stop_helpers
+# covers/wanted.txt as a symbolic link: not followed
+T=$(newroot t19c)
+mkdir -p "$T/hroot/covers"
+echo "secret" >"$T/secret.txt"
+ln -s "$T/secret.txt" "$T/hroot/covers/wanted.txt"
+SNES9X_PS5_ROOT=$T/hroot ASAN_OPTIONS=detect_leaks=0 timeout 60 "$HELPER" >"$T/helper.txt" 2>&1 &
+waitfor "$T/hroot/logs/helper.log" "listening" || sleep 1
+python3 - "$SNES9X_HELPER_PORT" "$T/answer.bin" <<'PY'
+import socket, struct, sys
+s = socket.create_connection(('127.0.0.1', int(sys.argv[1])))
+req = bytearray(0xA10)
+struct.pack_into('<IiI', req, 0, 0xDEADBEEF, 6, 1234)
+s.sendall(req)
+data = b''
+while True:
+    d = s.recv(65536)
+    if not d: break
+    data += d
+open(sys.argv[2], 'wb').write(data)
+PY
+expect "! grep -q secret $T/answer.bin" "a wanted.txt that is a symbolic link is not followed"
+stop_helpers
+# battery save: written; then a write that fails (full disk: files limited to 1 KiB) leaves it as it was
+T=$(newroot t19d)
+python3 tests/make_test_rom.py "$T/root/roms/save.sfc" sram >/dev/null
+QUIT="0:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0"
+rc=$(run "$T" "$QUIT" "" "$T/root/roms/save.sfc")
+S=$T/root/saves/save.srm
+expect "[ \"\$(stat -c %s $S 2>/dev/null)\" = 2048 ] && [ \"\$(head -c1 $S | od -An -tx1 | tr -d ' ')\" = 42 ] && [ ! -e $S.part ]" "the battery save holds what the game wrote (2 KiB, \$42)"
+python3 tests/make_test_rom.py "$T/root/roms/save.sfc" sram2 >/dev/null
+rc=$( (ulimit -f 1; trap '' XFSZ; run "$T" "$QUIT" "" "$T/root/roms/save.sfc") )
+expect "[ \"\$(stat -c %s $S 2>/dev/null)\" = 2048 ] && [ \"\$(head -c1 $S | od -An -tx1 | tr -d ' ')\" = 42 ]" "a battery save that can't be written whole leaves the old one intact"
+expect "[ ! -e $S.part ]" "and no .part is left behind"
+# a state: saved; then a failed save keeps the slot's old state
+T=$(newroot t19e)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+L2UP=$(printf %x $((0x$L2 | 0x$UP)))
+rc=$(run "$T" "0:0;60:$L2UP;62:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "" "$T/root/roms/test.sfc")
+cp "$T/root/states/test.000" "$T/state.before"
+rc=$( (ulimit -f 2; trap '' XFSZ; run "$T" "0:0;90:$L2UP;92:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "" "$T/root/roms/test.sfc") )
+expect "cmp -s $T/root/states/test.000 $T/state.before && [ ! -e $T/root/states/test.000.part ]" "a state that can't be written whole leaves the slot's old state intact"
+rc=$(run "$T" "0:0;60:$(printf %x $((0x$L2 | 0x$DOWN)));62:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "" "$T/root/roms/test.sfc")
+expect "grep -q 'load state 0 .*: ok' $T/root/logs/boot.log" "and it still loads"
+# Resume with Cross: while Cross is still held the game doesn't see B (the picture stays red)
+T=$(newroot t19f)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;100:$L3R3;102:0;120:$CROSS;200:0;250:$L3R3;252:0;260:$UP;262:0;270:$CROSS;272:0" "190" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ] && $CHECK $T/dump/flip00190.ppm 960 540 255 0 0 >/dev/null" "Cross held after Resume doesn't reach the game"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+# the library: a FIFO doesn't hang the scan; a zip entry name of 600 characters; deleted ROMs leave the CRC cache
+T=$(newroot t19g)
+mkfifo "$T/root/roms/pipe.sfc"
+python3 tests/make_test_rom.py "$T/root/roms/a.sfc" ntsc >/dev/null
+python3 tests/make_test_rom.py "$T/root/roms/b.sfc" pal >/dev/null
+python3 - "$T/root/roms/long.zip" "$T/root/roms/a.sfc" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], 'w') as z:
+    z.writestr('x' * 600 + '.txt', b'\0' * 1024)
+    z.write(sys.argv[2], 'inner.sfc')
+PY
+SHELFQUIT="0:0;30:$OPTIONS;32:0;40:$CROSS;42:0"
+rc=$(run "$T" "$SHELFQUIT" "")
+expect "[ $rc = 0 ] && ! grep -q 'pipe.sfc' $T/root/logs/boot.log" "a FIFO doesn't hang the shelf, and isn't listed"
+expect "grep -q 'long.zip ->' $T/root/logs/boot.log" "a zip with a 600-character entry name is still listed"
+expect "grep -q '/b.sfc' $T/root/covers/crc-cache.txt" "the CRC cache holds b.sfc"
+rm -f "$T/root/roms/b.sfc"
+rc=$(run "$T" "$SHELFQUIT" "")
+expect "! grep -q '/b.sfc' $T/root/covers/crc-cache.txt" "a deleted ROM leaves the CRC cache"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+# 720p: the picture follows the game to its edges
+T=$(newroot t19h)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(SNES9X_HOST_DIRECT_MAX_MIB=12 run "$T" "0:0;100:$CROSS;140:0;160:$L3R3;162:0;170:$UP;172:0;180:$CROSS;182:0" "130" "$T/root/roms/test.sfc")
+expect "$CHECK $T/dump/flip00130.ppm 170 360 0 255 0 >/dev/null && $CHECK $T/dump/flip00130.ppm 1110 360 0 255 0 >/dev/null" "720p: Cross turns the picture green to its edges"
+# Square (fetch the cover again): offline, or the server without it, the cover stays; with it, it's replaced
+T=$(newroot t19i)
+SRV=$T/srv/Named_Boxarts; mkdir -p "$SRV" "$T/root/covers"
+python3 tests/make_test_rom.py "$T/root/roms/Super Mario World (USA).sfc" ntsc >/dev/null
+python3 -c "from PIL import Image; Image.new('RGB',(512,357),(0,0,255)).save('$T/root/covers/Super Mario World (USA).png'); Image.new('RGB',(512,357),(255,0,0)).save('$T/red.png')"
+cp "$T/root/covers/Super Mario World (USA).png" "$T/blue.png"
+SQ="0:0;40:$SQUARE;42:0;200:$OPTIONS;202:0;210:$CROSS;212:0"
+rc=$(run "$T" "$SQ" "")
+expect "cmp -s '$T/root/covers/Super Mario World (USA).png' $T/blue.png" "offline: Square keeps the cover"
+PORT=18093
+(cd "$T/srv" && exec python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1) &
+SRVPID=$!
+sleep 1
+URL="http://127.0.0.1:$PORT/Named_Boxarts/\${name}.png"
+rc=$(OFFLINE= COVER_URL="$URL" SNES9X_HOST_REALTIME=1 run "$T" "$SQ" "")
+expect "cmp -s '$T/root/covers/Super Mario World (USA).png' $T/blue.png && [ ! -e '$T/root/covers/Super Mario World (USA).refetch' ]" "the server has none (404): the cover stays"
+cp "$T/red.png" "$SRV/Super Mario World (USA).png"
+rm -f "$T/root/covers/"*.missing
+rc=$(OFFLINE= COVER_URL="$URL" SNES9X_HOST_REALTIME=1 run "$T" "$SQ" "")
+kill $SRVPID 2>/dev/null
+expect "cmp -s '$T/root/covers/Super Mario World (USA).png' '$SRV/Super Mario World (USA).png' && [ ! -e '$T/root/covers/Super Mario World (USA).refetch' ]" "the server has it: the new cover replaces the old one"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
 
 echo
 echo "passed $PASS, failed $FAIL  (work dir $WORK)"

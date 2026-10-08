@@ -1,3 +1,5 @@
+![Snes9x for PS5](ps5/app/sce_sys/background-source.png)
+
 # Snes9x PS5
 
 **This repository is Snes9x ported to the PlayStation 5** as a native home-screen app: a 3D game shelf with

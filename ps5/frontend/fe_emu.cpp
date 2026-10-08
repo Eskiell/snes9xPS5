@@ -34,6 +34,10 @@
 #include "ppu.h"
 #include "snapshot.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <zlib.h>
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -83,6 +87,9 @@ struct State
 	bool quit = false;
 	uint32_t frame = 0;
 	uint32_t prev_p1 = 0;
+	// After the game starts or the pause menu closes, player 1's pad reaches the game only once the buttons that
+	// did it (Cross, Circle, L3 + R3) are let go: Resume with Cross must not press B in the game.
+	bool wait_release = true;
 	std::vector<int16_t> mix;
 	// last frame, for the pause menu
 	std::vector<uint16_t> last;
@@ -131,6 +138,38 @@ void WaitAudioBelow(int frames)
 	// at most ~100 ms, so a stalled audio thread can't freeze the game
 	for (int i = 0; i < 100 && ps5audio::Queued() > frames; i++)
 		usleep(1000);
+}
+
+// part (written by the caller) holds the whole new file: check its size, flush it to the disk, then rename it over
+// path. On any failure part is removed and path keeps its old content. expect: the exact size, or 0 for "not empty".
+bool CommitPart(const std::string& part, const std::string& path, size_t expect)
+{
+	const int fd = open(part.c_str(), O_RDONLY);
+	if (fd < 0)
+		return false;
+	struct stat st = {};
+	bool ok = fstat(fd, &st) == 0 && (expect ? size_t(st.st_size) == expect : st.st_size > 0);
+	ok = fsync(fd) == 0 && ok;
+	ok = close(fd) == 0 && ok;
+	if (!ok || rename(part.c_str(), path.c_str()) != 0)
+	{
+		unlink(part.c_str());
+		return false;
+	}
+	return true;
+}
+
+// The size Memory.SaveSRAM writes for the cartridge's battery RAM (memmap.cpp's own formula); 0 when none.
+size_t SramFileSize()
+{
+	if ((Settings.SuperFX && Memory.ROMType < 0x15) || (Settings.SA1 && Memory.ROMType == 0x34))
+		return 0;
+	size_t size = Memory.SRAMSize ? size_t(1 << (Memory.SRAMSize + 3)) * 128 : 0;
+	if (Memory.LoROM)
+		size = size < 0x70000 ? size : 0x70000;
+	else if (Memory.HiROM)
+		size = size < 0x40000 ? size : 0x40000;
+	return size;
 }
 
 std::string StatePath(int slot)
@@ -269,9 +308,17 @@ void S9xCloseSnapshotFile(STREAM file)
 
 void S9xAutoSaveSRAM()
 {
+	// Snes9x writes the file in place: through path.part, checked and renamed, so a power cut or a full disk while
+	// it is written leaves the save as it was
 	const std::string path = S9xGetFilename(".srm", SRAM_DIR);
-	const bool ok = Memory.SaveSRAM(path.c_str());
-	OrbisLog("[emu] battery save -> %s (%s)", path.c_str(), ok ? "ok" : "failed");
+	const size_t size = SramFileSize();
+	if (size == 0)
+		return;
+	const std::string part = path + ".part";
+	const bool ok = Memory.SaveSRAM(part.c_str()) && CommitPart(part, path, size);
+	if (!ok)
+		unlink(part.c_str());
+	OrbisLog("[emu] battery save -> %s (%s)", path.c_str(), ok ? "ok" : "failed, the save on disk is unchanged");
 }
 
 void S9xExit()
@@ -401,6 +448,7 @@ bool LoadGame(const std::string& path)
 	g.fast_forward = false;
 	g.quit = false;
 	g.prev_p1 = 0;
+	g.wait_release = true;
 	ps5video::InvalidateSnes();
 	ApplySettings();
 	OrbisLog("[emu] \"%s\" %s, %d fps, %s", Memory.ROMName, Memory.ROMFilename.c_str(), Memory.ROMFramesPerSecond,
@@ -463,9 +511,24 @@ bool SaveState(int slot)
 {
 	if (!g.loaded)
 		return false;
-	const std::string path = StatePath(slot);
-	const bool ok = S9xFreezeGame(path.c_str());
-	OrbisLog("[emu] save state %d -> %s: %s", slot, path.c_str(), ok ? "ok" : "failed");
+	// the state in memory, then written as S9xFreezeGame writes it (gzip) to path.part, checked and renamed: a full
+	// disk or a power cut leaves the slot's old state as it was (S9xFreezeGame overwrites in place and can't tell)
+	const std::string path = StatePath(slot), part = path + ".part";
+	const uint32 size = S9xFreezeSize();
+	std::vector<uint8> buf(size);
+	bool ok = size > 0 && S9xFreezeGameMem(buf.data(), size);
+	if (ok)
+	{
+		gzFile gz = gzopen(part.c_str(), "wb");
+		ok = gz != nullptr && gzwrite(gz, buf.data(), unsigned(size)) == int(size);
+		ok = gz != nullptr && gzclose(gz) == Z_OK && ok;
+		ok = ok && CommitPart(part, path, 0);
+		if (!ok)
+			unlink(part.c_str());
+	}
+	if (ok)
+		S9xResetSaveTimer(TRUE);
+	OrbisLog("[emu] save state %d -> %s: %s", slot, path.c_str(), ok ? "ok" : "failed, the slot is unchanged");
 	return ok;
 }
 
@@ -492,6 +555,11 @@ void Reset()
 		S9xSoftReset();
 }
 
+void AfterMenu()
+{
+	g.wait_release = true;
+}
+
 void RedrawLastFrame()
 {
 	if (g.last.empty())
@@ -510,6 +578,12 @@ FrameResult RunFrame()
 	ps5input::Poll();
 	const ps5input::PadState& p1 = ps5input::Pad(0);
 	const uint32_t raw = p1.buttons;
+	if (g.wait_release)
+	{
+		g.wait_release = (p1.raw_buttons & (SCE_PAD_BUTTON_L3 | SCE_PAD_BUTTON_R3 | SCE_PAD_BUTTON_CROSS |
+											   SCE_PAD_BUTTON_CIRCLE)) != 0;
+		g.prev_p1 = raw; // nothing held over counts as a new press either
+	}
 	const uint32_t pressed = raw & ~g.prev_p1;
 	g.prev_p1 = raw;
 
@@ -546,6 +620,8 @@ FrameResult RunFrame()
 	{
 		const ps5input::PadState& ps = ps5input::Pad(p);
 		uint32_t b = ps.connected ? ps.buttons : 0;
+		if (p == 0 && g.wait_release)
+			b = 0;
 		if (p == 0 && l2)
 			b &= ~uint32_t(SCE_PAD_BUTTON_UP | SCE_PAD_BUTTON_DOWN | SCE_PAD_BUTTON_LEFT | SCE_PAD_BUTTON_RIGHT);
 		for (int i = 0; i < B_COUNT; i++)
@@ -559,7 +635,7 @@ FrameResult RunFrame()
 		OrbisLog("[emu] frame %u: audio queued %d, underruns %llu, shader %.1f ms", g.frame, ps5audio::Queued(),
 			(unsigned long long)ps5audio::Underruns(), ps5video::TakeShaderMs());
 
-	if (!g.fast_forward && !Settings.Mute)
+	if (!g.fast_forward && !Settings.Mute && ps5audio::Available())
 	{
 		if (IsPal())
 			WaitAudioBelow(ps5audio::kCapacity / 2);
@@ -568,7 +644,7 @@ FrameResult RunFrame()
 	}
 	else if (!g.fast_forward && IsPal())
 	{
-		// muted PAL game: pace on the clock instead
+		// muted PAL game, or no sound output: pace on the clock instead
 		static double next = 0;
 		const double now = Now();
 		if (next < now - 0.1)

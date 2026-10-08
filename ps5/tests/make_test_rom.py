@@ -7,6 +7,8 @@ whole chain works: CPU, PPU, the port's scaler and tiler, and the pad -> Snes9x 
 
     make_test_rom.py out.sfc [ntsc|pal|msu]
 
+sram / sram2: an NTSC ROM with 2 KiB of battery RAM that writes $42 / $43 to its first byte ($70:0000), as a game
+saving does.
 msu: an NTSC ROM that also starts MSU-1 track 1 at full volume, playing and repeating (write $2004/$2005 =
 track 1, $2006 = volume $FF, $2007 = play + repeat), as an MSU-1 patched game does.
 """
@@ -16,7 +18,8 @@ import sys
 out = sys.argv[1]
 region = sys.argv[2] if len(sys.argv) > 2 else "ntsc"
 msu = region == "msu"
-if msu:
+sram = {"sram": 0x42, "sram2": 0x43}.get(region)
+if msu or sram:
     region = "ntsc"
 
 rom = bytearray([0xFF] * 0x8000)
@@ -34,7 +37,9 @@ reset = bytes([
     0x9C, 0x05, 0x20,        # STZ $2005       high byte: loads track 1
     0xA9, 0xFF, 0x8D, 0x06, 0x20,  # LDA #$FF; STA $2006  volume
     0xA9, 0x03, 0x8D, 0x07, 0x20,  # LDA #$03; STA $2007  play + repeat
-]) if msu else b"") + bytes([
+]) if msu else b"") + (bytes([
+    0xA9, sram, 0x8F, 0x00, 0x00, 0x70,  # LDA #value; STA $700000  the battery RAM's first byte
+]) if sram else b"") + bytes([
     0xA9, 0x81, 0x8D, 0x00, 0x42,  # LDA #$81; STA $4200  NMI + auto joypad read
     0xCB,                    # loop: WAI
     0x80, 0xFD,              # BRA loop
@@ -61,9 +66,9 @@ rom[0x0100:0x0100 + len(nmi)] = nmi
 title = b"SNES9X PS5 TEST".ljust(21, b" ")
 rom[0x7FC0:0x7FD5] = title
 rom[0x7FD5] = 0x20          # LoROM, slow
-rom[0x7FD6] = 0x00          # ROM only
+rom[0x7FD6] = 0x02 if sram else 0x00  # ROM + RAM + battery, or ROM only
 rom[0x7FD7] = 0x05          # 32 KiB
-rom[0x7FD8] = 0x00          # no SRAM
+rom[0x7FD8] = 0x01 if sram else 0x00  # 2 KiB of battery RAM, or none
 rom[0x7FD9] = 0x01 if region == "ntsc" else 0x02  # USA / Europe
 rom[0x7FDA] = 0x00
 rom[0x7FDB] = 0x00

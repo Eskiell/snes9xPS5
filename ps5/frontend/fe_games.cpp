@@ -145,7 +145,8 @@ bool HasRomExt(const std::string& ext)
 struct CrcCache
 {
 	std::mutex lock;
-	std::unordered_map<std::string, std::string> lines; // path -> "size\tmtime\tcrc"
+	std::unordered_map<std::string, std::string> lines; // path -> "size\tmtime\tcrc" (or "size\tmtime\tfail")
+	std::unordered_map<std::string, bool> seen; // the paths this scan looked up
 	bool dirty = false;
 	std::string file;
 	void Load()
@@ -169,6 +170,17 @@ struct CrcCache
 	}
 	void Save()
 	{
+		// entries of files that are gone are dropped (a USB drive that isn't plugged in keeps its own)
+		for (auto it = lines.begin(); it != lines.end();)
+		{
+			if (!seen.count(it->first) && it->first.rfind("/mnt/", 0) != 0)
+			{
+				it = lines.erase(it);
+				dirty = true;
+			}
+			else
+				++it;
+		}
 		if (!dirty)
 			return;
 		const std::string tmp = file + ".part";
@@ -177,14 +189,20 @@ struct CrcCache
 			return;
 		for (const auto& kv : lines)
 			fprintf(f, "%s\t%s\n", kv.first.c_str(), kv.second.c_str());
-		fclose(f);
-		rename(tmp.c_str(), file.c_str());
+		bool ok = ferror(f) == 0;
+		ok = fclose(f) == 0 && ok;
+		if (!ok || rename(tmp.c_str(), file.c_str()) != 0)
+		{
+			remove(tmp.c_str());
+			return;
+		}
 		dirty = false;
 	}
 };
 
 bool CachedCrc(CrcCache& cache, const std::string& path, uint32_t* crc)
 {
+	cache.seen[path] = true;
 	struct stat st = {};
 	if (stat(path.c_str(), &st) != 0)
 		return false;
@@ -193,12 +211,20 @@ bool CachedCrc(CrcCache& cache, const std::string& path, uint32_t* crc)
 	auto it = cache.lines.find(path);
 	if (it != cache.lines.end() && it->second.compare(0, strlen(key), key) == 0)
 	{
+		if (it->second.compare(strlen(key), std::string::npos, "fail") == 0)
+			return false; // couldn't be read last time, and hasn't changed since
 		*crc = uint32_t(strtoul(it->second.c_str() + strlen(key), nullptr, 16));
 		return true;
 	}
-	if (!RomCrc32(path, crc))
-		return false;
 	char val[96];
+	if (!RomCrc32(path, crc))
+	{
+		// unreadable (or an empty zip): remembered, so the next scans don't read it again until it changes
+		snprintf(val, sizeof(val), "%sfail", key);
+		cache.lines[path] = val;
+		cache.dirty = true;
+		return false;
+	}
 	snprintf(val, sizeof(val), "%s%08X", key, *crc);
 	cache.lines[path] = val;
 	cache.dirty = true;
@@ -215,12 +241,17 @@ void Walk(const std::string& dir, int depth, bool usb, std::vector<GameInfo>& ou
 		if (e->d_name[0] == '.')
 			continue;
 		const std::string path = dir + "/" + e->d_name;
-		if (OrbisIsDir(path))
+		struct stat st = {};
+		if (stat(path.c_str(), &st) != 0)
+			continue;
+		if (S_ISDIR(st.st_mode))
 		{
 			if (depth < 4)
 				Walk(path, depth + 1, usb, out);
 			continue;
 		}
+		if (!S_ISREG(st.st_mode))
+			continue; // a FIFO or a device would block the CRC read (and the shelf) forever
 		const std::string name = e->d_name;
 		const size_t dot = name.find_last_of('.');
 		if (dot == std::string::npos || dot == 0)
@@ -310,7 +341,10 @@ bool RomCrc32(const std::string& path, uint32_t* crc)
 		{
 			unz_file_info info;
 			char name[512];
-			if (unzGetCurrentFileInfo(z, &info, name, sizeof(name), nullptr, 0, nullptr, 0) != UNZ_OK)
+			// minizip ends the name with '\0' only when it fits: keep the last byte for it, skip names that don't fit
+			name[sizeof(name) - 1] = '\0';
+			if (unzGetCurrentFileInfo(z, &info, name, sizeof(name) - 1, nullptr, 0, nullptr, 0) != UNZ_OK ||
+				info.size_filename >= sizeof(name) - 1)
 				continue;
 			if (info.uncompressed_size < best_size)
 				continue; // the ROM is the biggest file in the archive
@@ -391,8 +425,13 @@ std::vector<GameInfo> ScanGames()
 		return c != 0 ? c < 0 : a.path < b.path;
 	});
 	OrbisLog("[games] %zu ROM(s); table of %zu names", games.size(), gamedb::Count());
-	for (const GameInfo& g : games)
-		OrbisLog("[games]   %s -> \"%s\"%s", g.path.c_str(), g.nointro.c_str(), g.name_by_crc ? " (by CRC)" : "");
+	// each game once per scan is a lot of boot.log for a big library: the first 200
+	constexpr size_t kLogged = 200;
+	for (size_t i = 0; i < games.size() && i < kLogged; i++)
+		OrbisLog("[games]   %s -> \"%s\"%s", games[i].path.c_str(), games[i].nointro.c_str(),
+			games[i].name_by_crc ? " (by CRC)" : "");
+	if (games.size() > kLogged)
+		OrbisLog("[games]   ... and %zu more", games.size() - kLogged);
 	return games;
 }
 } // namespace fe

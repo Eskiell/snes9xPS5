@@ -157,6 +157,15 @@ __attribute__((target("avx2"))) void TileArea(const uint32_t* src, uint32_t pitc
 void TileBlit(int buf_idx, R damage)
 {
 	const R screen = {0, 0, g.out_w, g.out_h};
+	if (g.out_w != kWidth && !damage.Empty())
+	{
+		// the damage is in surface (1920x1080) pixels: the scan-out pixels showing them, rounded outwards
+		const int x0 = damage.x * g.out_w / kWidth, y0 = damage.y * g.out_h / kHeight;
+		const int x1 = ((damage.x + damage.w) * g.out_w + kWidth - 1) / kWidth;
+		const int y1 = ((damage.y + damage.h) * g.out_h + kHeight - 1) / kHeight;
+		damage = R{x0, y0, x1 - x0, y1 - y0};
+		Intersect(damage, screen);
+	}
 	R area;
 	if (g.full[buf_idx])
 		area = screen;
