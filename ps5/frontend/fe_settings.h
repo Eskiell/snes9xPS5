@@ -8,8 +8,9 @@ namespace fe
 {
 struct Settings
 {
+	int shader = 1; // ps5crt::Shader: CRT Easymode style unless another is picked (0 = Off)
 	int aspect = 0; // ps5video::Aspect
-	bool scanlines = false;
+	bool scanlines = false; // with the shader Off
 	bool show_fps = false;
 	bool audio = true;
 	int state_slot = 0; // 0..9

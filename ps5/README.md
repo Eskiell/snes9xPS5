@@ -10,8 +10,8 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 
 Everything outside `ps5/` is the original Snes9x source, unchanged.
 
-> **Status (2.0):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 88 host tests, which run the same code
+> **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 120 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -40,9 +40,12 @@ written to PS5SX2's folders (`/data/PCSX2`, `/data/homebrew/PPSA99203`).
 
 ## Versions
 
-Every release carries its version in the file name: `Snes9xPS5-v2.0.elf` and `snes9x-ps5-v2.0-src.zip`
+Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `snes9x-ps5-v2.1-src.zip`
 (`make dist`). When updating, replace the old ELF with the new one in your autoload or Payload Manager. In this
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
+
+**2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)). **2.0:** Snes9x as a native
+home-screen app.
 
 ## Language
 
@@ -59,10 +62,10 @@ Every screen and notification of Snes9x PS5 is in English.
 
 1. **Send `Snes9xPS5.elf`** with PS5 Payload Manager, or from a PC on the same network:
    ```sh
-   nc -q0 PS5_IP 9021 < Snes9xPS5-v2.0.elf
+   nc -q0 PS5_IP 9021 < Snes9xPS5-v2.1.elf
    ```
    It installs the app in `/data/homebrew/PPSA99009/` (`eboot.bin`, `sce_module/libc.prx`, `param.json`, the
-   icon and the backgrounds), shows **"Snes9x PS5 2.0 installed. Open it from the Snes9x PS5 icon on the home
+   icon and the backgrounds), shows **"Snes9x PS5 2.1 installed. Open it from the Snes9x PS5 icon on the home
    screen."** and stays running as the helper.
 2. **Open the Snes9x PS5 icon.** The game shelf appears and the controller works.
 3. **Copy your ROMs** (`.sfc .smc .swc .fig .bs .st .zip .gz`) to `/data/snes9x/roms`, over FTP for example, or
@@ -72,7 +75,7 @@ Tip: put `Snes9xPS5.elf` in your autoload, as PS5SX2 recommends for its payloads
 
 **Updating:** send the new `Snes9xPS5.elf` once. It compares every app file with the copy it carries and rewrites
 only what changed; each file is written to a temporary file and then renamed, `eboot.bin` last. The notification
-says "Snes9x PS5 updated to 2.0". A deleted or damaged icon is put back the same way. A second copy sent while
+says "Snes9x PS5 updated to 2.1". A deleted or damaged icon is put back the same way. A second copy sent while
 the helper is already running only installs and exits.
 
 **If "Snes9x PS5 has no access to /data" appears:** no helper answered and the ELF loader wasn't running. Send
@@ -185,7 +188,7 @@ On the test PC a frame takes about 15 ms on 2 cores.
 
 | Combination | Does |
 |---|---|
-| L3 + R3 | pause menu (save/load state, slot, aspect ratio, scanlines, FPS, sound, reset, back to the list, quit) |
+| L3 + R3 | pause menu (save/load state, slot, shader, aspect ratio, scanlines, FPS, sound, reset, back to the list, quit) |
 | L2 + Up / Down | save / load the state in the current slot |
 | L2 + Left / Right | change slot (0–9) |
 | hold R2 | fast forward |
@@ -193,12 +196,60 @@ On the test PC a frame takes about 15 ms on 2 cores.
 Up to 4 controllers: players 2 to 4 are the other signed-in users. With 3 or 4 controllers the multitap is turned
 on in port 2. The light bar shows the player (blue, red, green, pink).
 
+## CRT shaders
+
+Every game starts through a CRT shader -- **CRT Easymode style** unless you pick another one. Eleven shaders are
+built in, the same as in Genesis Plus GX PS5; they work with every game (hi-res and interlaced pictures included)
+and only while a game is running (the shelf is drawn without them).
+
+**How to use them**
+
+1. **In a game:** press **L3 + R3**; **Shader** is the row after "State slot". **Left / Right** (or **Cross**) go
+   through the list, and the paused game behind the menu shows each one at once. **Circle** goes back to the game.
+2. **On the shelf:** **Triangle** opens the settings; **Shader** is the first row.
+3. The choice is saved and used for every game. **Off** gives the plain picture, with the "Scanlines" option.
+4. It is kept in `/data/snes9x/snes9x-ps5.ini` as `shader=<number>` (the numbers below): you can also set it there
+   by hand.
+
+| `shader=` | Shader | Look | Weight | From |
+|---|---|---|---|---|
+| 0 | Off | the plain picture | -- | -- |
+| 1 | **CRT Easymode style** (default) | flat screen, sharp, scanlines that widen on bright colours, aperture grille | medium | written for these ports, after the look of EasyMode's crt-easymode |
+| 2 | crt-lottes | curved screen, Gaussian beam, shadow mask, a little bloom | heavy | Timothy Lottes (public domain) |
+| 3 | crt-lottes-fast | lighter Lottes: curved, 4-tap beam, aperture mask, tone mapping | medium | Timothy Lottes (public domain) |
+| 4 | crt-1tap | very light, contrasty dynamic scanlines | light | fishku (CC0) |
+| 5 | crt-2tap | crt-1tap with exact blending between two lines | light | fishku (CC0) |
+| 6 | crt-hyllian-fast | sharp Catmull-Rom picture, strong scanlines, magenta/green dot mask | medium | Hyllian (MIT) |
+| 7 | crt-nobody | curved screen with rounded corners, beam scanlines, magenta/green mask | heavy | Hyllian (MIT) |
+| 8 | newpixie-mini | strongly curved TV, colour bleed, vignette, film tone | heavy | Mattias Gustavsson (Unlicense) |
+| 9 / 10 | crt-blurPi-sharp / crt-blurPi-soft | light blur and screen-space scanlines (sharp or bilinear) | light | Oriol Ferrer Mesià (MIT) |
+| 11 | monoCRT | a monochrome monitor (made for black-and-white pictures) | light | hunterk (public domain) |
+
+Which to pick: **CRT Easymode style** for a sharp, flat arcade-monitor look; **crt-hyllian-fast** for stronger
+scanlines and a visible dot mask; **crt-lottes** or **crt-nobody** for a curved TV; **crt-1tap / crt-2tap** when a
+game should stay as light as possible.
+
+They come from libretro's [slang-shaders](https://github.com/libretro/slang-shaders) (`crt/`), with their default
+parameters. Why these: the PS5 build draws the picture with the CPU (there is no GPU driver for homebrew apps), so
+only single-pass shaders are fast enough, and only shaders whose licence fits Snes9x's (public domain, CC0,
+Unlicense, MIT) can be built in. crt-easymode itself is GPL, which the Snes9x licence can't take in, so "CRT
+Easymode style" is original code aiming at the same look. Multi-pass shaders (crt-royale, crt-guest-advanced, the
+Mega Bezel...) need a GPU.
+
+How they run: each shader is rewritten in C++ (`ps5/coreorbis/orbis-shims/ProsperoCrt.cpp`). What depends only on
+a source line and a screen column (the horizontal filter) is computed once per source line; per screen pixel only
+the vertical blend, the beam, the mask and a gamma table remain; curved screens use a per-pixel map built once per
+picture size. The work is shared by up to six threads. `boot.log` says how long the shader took per frame
+(`shader N ms`, with the frame counts it logs); if a heavy one (crt-lottes, crt-nobody, newpixie-mini) makes a
+game slow down -- hi-res games (512 pixels wide) cost more -- pick a lighter one. Licence notices are in
+`ps5/THIRD_PARTY_SHADERS.md`.
+
 ## Picture and sound
 
 - 1920x1080 output through `libSceVideoOut`, flipping on vsync. With little video memory it falls back to
   1280x720.
 - Aspect ratio: **4:3** (default), **8:7** (square pixels), **integer scale** (4x, 1024x896) or **16:9**.
-  Optional scanlines.
+- A CRT shader on top (CRT Easymode style by default, see below); with the shader Off, optional plain scanlines.
 - Sound through `libSceAudioOut` at 48 kHz, on its own thread.
   - Snes9x's *dynamic rate control* adjusts the sound by up to 0.5% to follow the TV's 60 Hz without crackles.
   - PAL (50 Hz) games follow the audio clock.
@@ -235,7 +286,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 88 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 120 tests (ASan/UBSan)
 ```
 
 The build has three stages:
@@ -261,6 +312,7 @@ The build has three stages:
 - **`ps5/coreorbis/orbis-shims/`**: the PS5 layer.
   - `ProsperoVideo.cpp`: `libSceVideoOut`, direct memory, two scan-out buffers, AVX2 tiling, scaling of the
     SNES picture;
+  - `ProsperoCrt.cpp`: the CRT shaders on the CPU, and their thread pool;
   - `ProsperoAudio.cpp`: `libSceAudioOut`, lock-free ring buffer, output thread;
   - `ProsperoInput.cpp`: `libScePad` + `libSceUserService`, up to 4 players;
   - `ProsperoJailbreak.cpp` / `ProsperoHelper.cpp`: both sides of the sandbox request and the covers list;
@@ -299,6 +351,11 @@ The build has three stages:
 - The VideoOut tiling and setup follow the SDK's SDL2 port (zlib license).
 - **zlib** (Jean-loup Gailly and Mark Adler): zlib license.
 - **stb_image / stb_image_resize2 / stb_truetype** (Sean Barrett): public domain or MIT, the same as PS5SX2.
+- **CRT shaders** from libretro's [slang-shaders](https://github.com/libretro/slang-shaders), rewritten for the CPU:
+  crt-lottes and crt-lottes-fast (Timothy Lottes, public domain), crt-1tap and crt-2tap (fishku, CC0), monoCRT
+  (hunterk, public domain), newpixie-mini (Mattias Gustavsson, Unlicense), crt-hyllian-fast and crt-nobody
+  (Hyllian, MIT), crt-blurPi (Oriol Ferrer Mesià, MIT). Their notices are in `ps5/THIRD_PARTY_SHADERS.md`.
+  "CRT Easymode style" is original code; the look it follows is EasyMode's crt-easymode.
 - **UI fonts**, the same as PS5SX2's (which takes them from PCSX2), in `frontend/assets/fonts/` with their
   licenses:
   - **Roboto Regular** (Google, Apache 2.0);

@@ -16,6 +16,7 @@
 #include "ProsperoVideo.h"
 
 #include "OrbisPaths.h"
+#include "ProsperoCrt.h"
 #include "ProsperoSce.h"
 
 #include <immintrin.h>
@@ -26,6 +27,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <vector>
 
 namespace ps5video
@@ -485,13 +487,19 @@ struct SnesGeom
 	int src_w = 0, src_h = 0;
 	Aspect aspect = Aspect::Count;
 	bool scanlines = false;
+	int shader = 0;
 	Rect dst = {0, 0, 0, 0};
 	std::vector<uint16_t> xlut; // dst column -> src column
 	std::vector<uint16_t> ylut; // dst row -> src row
 	std::vector<uint8_t> dark; // dst row is a scanline row
 };
 SnesGeom s_geom;
-uint32_t* s_rgb565 = nullptr; // RGB565 -> A8B8G8R8
+uint32_t* s_rgb565 = nullptr; // RGB565 -> A8B8G8R8 (the surface's format)
+uint32_t* s_argb565 = nullptr; // RGB565 -> A8R8G8B8 (what the CRT shaders read)
+std::vector<uint32_t> s_argb; // the frame in A8R8G8B8, for the shaders
+double s_shader_ms = 0;
+int s_shader_frames = 0;
+uint64_t s_frame_no = 0;
 
 void BuildColorLut()
 {
@@ -500,6 +508,12 @@ void BuildColorLut()
 	{
 		const uint32_t r5 = (c >> 11) & 31, g6 = (c >> 5) & 63, b5 = c & 31;
 		s_rgb565[c] = Rgb(uint8_t((r5 << 3) | (r5 >> 2)), uint8_t((g6 << 2) | (g6 >> 4)), uint8_t((b5 << 3) | (b5 >> 2)));
+	}
+	s_argb565 = static_cast<uint32_t*>(malloc(65536 * sizeof(uint32_t)));
+	for (uint32_t c = 0; c < 65536; c++)
+	{
+		const uint32_t r5 = (c >> 11) & 31, g6 = (c >> 5) & 63, b5 = c & 31;
+		s_argb565[c] = 0xff000000u | (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8) | ((b5 << 3) | (b5 >> 2));
 	}
 }
 
@@ -557,16 +571,28 @@ void InvalidateSnes()
 	s_geom.src_w = 0;
 }
 
-Rect DrawSnes(const uint16_t* src, int pitch_bytes, int w, int h, Aspect aspect, bool scanlines)
+double TakeShaderMs()
 {
+	const double ms = s_shader_frames ? s_shader_ms / s_shader_frames : 0.0;
+	s_shader_ms = 0;
+	s_shader_frames = 0;
+	return ms;
+}
+
+Rect DrawSnes(const uint16_t* src, int pitch_bytes, int w, int h, Aspect aspect, bool scanlines, int shader)
+{
+	if (shader < 0 || shader >= int(ps5crt::Shader::Count))
+		shader = 0;
 	if (!g.surface || w <= 0 || h <= 0)
 		return Rect{0, 0, 0, 0};
 	if (!s_rgb565)
 		BuildColorLut();
 
 	bool cleared = false;
-	if (w != s_geom.src_w || h != s_geom.src_h || aspect != s_geom.aspect || scanlines != s_geom.scanlines)
+	if (w != s_geom.src_w || h != s_geom.src_h || aspect != s_geom.aspect || scanlines != s_geom.scanlines ||
+		shader != s_geom.shader)
 	{
+		s_geom.shader = shader;
 		s_geom.src_w = w;
 		s_geom.src_h = h;
 		s_geom.aspect = aspect;
@@ -591,10 +617,44 @@ Rect DrawSnes(const uint16_t* src, int pitch_bytes, int w, int h, Aspect aspect,
 		}
 		FillRect(0, 0, kWidth, kHeight, Rgb(0, 0, 0));
 		cleared = true;
+		const Rect& r = s_geom.dst;
+		// logged when it changes (the pause menu redraws the frame, with InvalidateSnes, every time it draws)
+		static int logged[5] = {-1, -1, -1, -1, -1};
+		const int now[5] = {w, h, int(aspect), scanlines ? 1 : 0, shader};
+		if (memcmp(logged, now, sizeof(now)) != 0)
+		{
+			memcpy(logged, now, sizeof(now));
+			if (shader > 0)
+				OrbisLog("[video] picture %dx%d, %s, shader %s -> %d,%d %dx%d", w, h, AspectName(aspect),
+					ps5crt::Name(ps5crt::Shader(shader)), r.x, r.y, r.w, r.h);
+			else
+				OrbisLog("[video] picture %dx%d, %s%s -> %d,%d %dx%d", w, h, AspectName(aspect),
+					scanlines ? ", scanlines" : "", r.x, r.y, r.w, r.h);
+		}
 	}
 
 	const Rect& d = s_geom.dst;
 	const uint8_t* src8 = reinterpret_cast<const uint8_t*>(src);
+	s_frame_no++;
+	if (shader > 0)
+	{
+		// the CRT shader reads the whole frame (hi-res 512-wide and interlaced pictures as they are)
+		timespec t0, t1;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		s_argb.resize(size_t(w) * h);
+		for (int y = 0; y < h; y++)
+		{
+			const uint16_t* in = reinterpret_cast<const uint16_t*>(src8 + size_t(y) * pitch_bytes);
+			uint32_t* out = s_argb.data() + size_t(y) * w;
+			for (int x = 0; x < w; x++)
+				out[x] = s_argb565[in[x]];
+		}
+		ps5crt::Render(ps5crt::Shader(shader), s_argb.data(), w, h, g.surface, kWidth, d.x, d.y, d.w, d.h, s_frame_no);
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		s_shader_ms += (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+		s_shader_frames++;
+		return cleared ? Rect{0, 0, kWidth, kHeight} : d;
+	}
 	const uint16_t* xl = s_geom.xlut.data();
 	uint32_t* bright = nullptr; // last row written at full brightness
 	int bright_src = -1;

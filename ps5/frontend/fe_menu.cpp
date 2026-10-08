@@ -12,6 +12,7 @@
 #include "fe_text.h"
 
 #include "OrbisPaths.h"
+#include "ProsperoCrt.h"
 #include "ProsperoInput.h"
 #include "ProsperoSce.h"
 #include "ProsperoVideo.h"
@@ -243,6 +244,7 @@ const char* YesNo(bool b)
 // and 'dir' (-1/+1) changed it.
 enum SettingRow
 {
+	S_SHADER,
 	S_ASPECT,
 	S_SCANLINES,
 	S_FPS,
@@ -257,8 +259,9 @@ std::string SettingLabel(int s)
 {
 	switch (s)
 	{
+		case S_SHADER: return "Shader";
 		case S_ASPECT: return "Aspect ratio";
-		case S_SCANLINES: return "Scanlines (CRT effect)";
+		case S_SCANLINES: return "Scanlines (shader Off)";
 		case S_FPS: return "Show FPS";
 		case S_AUDIO: return "Sound";
 		case S_TRANSPARENCY: return "Transparency";
@@ -274,6 +277,7 @@ std::string SettingValue(int s)
 	char buf[32];
 	switch (s)
 	{
+		case S_SHADER: return ps5crt::Name(ps5crt::Shader(c.shader));
 		case S_ASPECT: return ps5video::AspectName(ps5video::Aspect(c.aspect));
 		case S_SCANLINES: return YesNo(c.scanlines);
 		case S_FPS: return YesNo(c.show_fps);
@@ -291,6 +295,12 @@ void ChangeSetting(int s, int dir)
 	const int n = int(ps5video::Aspect::Count);
 	switch (s)
 	{
+		case S_SHADER:
+		{
+			const int ns = int(ps5crt::Shader::Count);
+			c.shader = (c.shader + dir + ns) % ns;
+			break;
+		}
 		case S_ASPECT: c.aspect = (c.aspect + dir + n) % n; break;
 		case S_SCANLINES: c.scanlines = !c.scanlines; break;
 		case S_FPS: c.show_fps = !c.show_fps; break;

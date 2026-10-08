@@ -154,7 +154,7 @@ bool8 S9xDeinitUpdate(int width, int height)
 {
 	const fe::Settings& cfg = fe::Config();
 	const ps5video::Rect r = ps5video::DrawSnes(GFX.Screen, GFX.Pitch, width, height,
-		ps5video::Aspect(cfg.aspect), cfg.scanlines);
+		ps5video::Aspect(cfg.aspect), cfg.scanlines, cfg.shader);
 	// keep a copy for the pause menu
 	g.last_w = width;
 	g.last_h = height;
@@ -498,7 +498,8 @@ void RedrawLastFrame()
 		return;
 	const fe::Settings& cfg = fe::Config();
 	ps5video::InvalidateSnes();
-	ps5video::DrawSnes(g.last.data(), g.last_w * 2, g.last_w, g.last_h, ps5video::Aspect(cfg.aspect), cfg.scanlines);
+	ps5video::DrawSnes(g.last.data(), g.last_w * 2, g.last_w, g.last_h, ps5video::Aspect(cfg.aspect), cfg.scanlines,
+		cfg.shader);
 }
 
 FrameResult RunFrame()
@@ -555,8 +556,8 @@ FrameResult RunFrame()
 	S9xMainLoop();
 	g.frame++;
 	if (g.frame == 60 || g.frame == 240 || g.frame % 3600 == 0)
-		OrbisLog("[emu] frame %u: audio queued %d, underruns %llu", g.frame, ps5audio::Queued(),
-			(unsigned long long)ps5audio::Underruns());
+		OrbisLog("[emu] frame %u: audio queued %d, underruns %llu, shader %.1f ms", g.frame, ps5audio::Queued(),
+			(unsigned long long)ps5audio::Underruns(), ps5video::TakeShaderMs());
 
 	if (!g.fast_forward && !Settings.Mute)
 	{

@@ -50,7 +50,11 @@ struct Rect
 {
 	int x, y, w, h;
 };
-Rect DrawSnes(const uint16_t* src, int pitch_bytes, int w, int h, Aspect aspect, bool scanlines);
+// shader: a ps5crt::Shader (0 = none: the plain scaler, with 'scanlines'); with one, the CRT shader draws the picture
+// instead (ProsperoCrt.h).
+Rect DrawSnes(const uint16_t* src, int pitch_bytes, int w, int h, Aspect aspect, bool scanlines, int shader = 0);
+// The shader's average drawing time since the last call, in ms (0 when no shader drew).
+double TakeShaderMs();
 // The last rectangle DrawSnes covered (to darken it for the menu, or to clear around it).
 Rect LastSnesRect();
 // Forget the cached geometry: the next DrawSnes clears the borders.

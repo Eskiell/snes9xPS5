@@ -24,6 +24,7 @@ expect() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 newroot() {
 	local t=$WORK/$1
 	rm -rf "$t" && mkdir -p "$t/root/roms" "$t/dump"
+	echo "shader=0" >"$t/root/snes9x-ps5.ini" # the plain picture: the colour checks expect it (group 16 tests the shaders)
 	echo "$t"
 }
 
@@ -74,7 +75,7 @@ expect "python3 -c 'import sys; sys.exit(0 if 5.0 <= $secs <= 9.0 else 1)'" "300
 echo "== 4. integer scale and scanlines from the settings file; load state with L2 + Down"
 T=$(newroot t4)
 python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
-printf 'aspect=2\nscanlines=1\n' >"$T/root/snes9x-ps5.ini"
+printf 'aspect=2\nscanlines=1\n' >>"$T/root/snes9x-ps5.ini"
 rc=$(run "$T" "0:0;60:$(printf %x $((0x$L2 | 0x$UP)));62:0;80:$(printf %x $((0x$L2 | 0x$DOWN)));82:0;100:$L3R3;102:0;110:$UP;112:0;120:$CROSS;122:0" "50" "$T/root/roms/test.sfc")
 expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
 expect "$CHECK $T/dump/flip00050.ppm 445 540 0 0 0 >/dev/null" "integer 4x: black left of x=448"
@@ -298,6 +299,49 @@ expect "! grep -q 'restarting' $T/root/logs/boot.log" "second start: no restart 
 expect "[ ! -s $T/root/covers/wanted.txt ]" "second start: the wanted list is empty"
 kill $SRVPID 2>/dev/null
 stop_helpers
+
+echo "== 16. CRT shaders: CRT Easymode style by default, every shader draws, the choice is kept"
+QUITAT() { echo "$1:$L3R3;$(($1 + 5)):0;$(($1 + 20)):$UP;$(($1 + 22)):0;$(($1 + 30)):$CROSS;$(($1 + 32)):0"; }
+SHADERS=("Off" "CRT Easymode style" "crt-lottes" "crt-lottes-fast" "crt-1tap" "crt-2tap" "crt-hyllian-fast" "crt-nobody" "newpixie-mini" "crt-blurPi-sharp" "crt-blurPi-soft" "monoCRT")
+T=$(newroot t16)
+rm -f "$T/root/snes9x-ps5.ini" # a first start: no settings file yet
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;100:$CROSS;140:0;$(QUITAT 160)" "90,130" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'shader CRT Easymode style' $T/root/logs/boot.log" "a first start draws the game through CRT Easymode style"
+expect "python3 - $T/dump/flip00090.ppm <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read().split(b'\n', 3)
+w, h = map(int, d[1].split()); px = d[3]
+R = lambda x, y: px[(y * w + x) * 3]
+col = [R(960, y) for y in range(400, 460)] # down the middle: scanlines
+row = [R(x, 540) for x in range(900, 960)] # across: the aperture grille
+sys.exit(0 if max(col) > 150 and min(col) < 0.9 * max(col) and len(set(row)) > 1 else 1)
+PY" "scanlines and a phosphor mask on the red picture"
+expect "python3 -c \"import sys; d=open('$T/dump/flip00130.ppm','rb').read().split(b'\\n',3); w=int(d[1].split()[0]); p=d[3]; sys.exit(0 if max(p[(y*w+960)*3+1] for y in range(520,560)) > 150 else 1)\"" "Cross -> green through the shader"
+expect "grep -q 'shader [0-9.]* ms' $T/root/logs/boot.log" "the shader's drawing time is logged"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
+for s in $(seq 1 11); do
+	T=$(newroot t16s$s)
+	echo "shader=$s" >"$T/root/snes9x-ps5.ini"
+	python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+	rc=$(run "$T" "0:0;$(QUITAT 100)" "90" "$T/root/roms/test.sfc")
+	expect "[ $rc = 0 ] && grep -q 'shader ${SHADERS[$s]} ->' $T/root/logs/boot.log && python3 -c \"import sys; d=open('$T/dump/flip00090.ppm','rb').read().split(b'\\n',3); w=int(d[1].split()[0]); p=d[3]; sys.exit(0 if max(p[(y*w+960)*3] for y in range(500,580)) > 60 else 1)\"" "${SHADERS[$s]} draws the picture"
+	expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "${SHADERS[$s]}: no sanitizer reports"
+done
+T=$(newroot t16m)
+python3 tests/make_test_rom.py "$T/root/roms/Alpha (USA).sfc" ntsc >/dev/null
+# Triangle -> settings, the first row is Shader: Right three times -> crt-lottes-fast; Circle -> back; Options + Cross -> quit
+TRIANGLE=1000; RIGHT=20
+rc=$(run "$T" "0:0;30:$TRIANGLE;32:0;40:$RIGHT;42:0;46:$RIGHT;48:0;52:$RIGHT;54:0;60:$CIRCLE;62:0;70:$OPTIONS;72:0;80:$CROSS;82:0" "50")
+expect "grep -q '^shader=3$' $T/root/snes9x-ps5.ini" "the settings screen's Shader row is saved (shader=0 -> 3)"
+# in a game: L3 + R3, Down four times (Save, Load, State slot, Shader), Right -> CRT Easymode style, Circle resumes
+T=$(newroot t16p)
+python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
+rc=$(run "$T" "0:0;60:$L3R3;65:0;80:$DOWN;82:0;86:$DOWN;88:0;92:$DOWN;94:0;98:$DOWN;100:0;110:$RIGHT;112:0;120:$CIRCLE;122:0;$(QUITAT 200)" "" "$T/root/roms/test.sfc")
+expect "[ $rc = 0 ] && grep -q '^shader=1$' $T/root/snes9x-ps5.ini" "the pause menu's Shader row changes it in the game (saved)"
+expect "grep -q 'shader CRT Easymode style' $T/root/logs/boot.log && [ \$(grep -c '\[video\] picture' $T/root/logs/boot.log) -le 4 ]" "the game is drawn through it; the menu doesn't flood boot.log"
+expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
 
 echo
 echo "passed $PASS, failed $FAIL  (work dir $WORK)"

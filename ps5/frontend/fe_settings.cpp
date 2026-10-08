@@ -22,6 +22,8 @@ int Clamp(int v, int lo, int hi)
 {
 	return v < lo ? lo : (v > hi ? hi : v);
 }
+
+constexpr int kShaderCount = 12; // ps5crt::Shader::Count
 } // namespace
 
 Settings& Config()
@@ -45,7 +47,9 @@ void Settings::Load()
 		*eq = 0;
 		const std::string key = line;
 		const char* val = eq + 1;
-		if (key == "aspect")
+		if (key == "shader")
+			shader = Clamp(atoi(val), 0, kShaderCount - 1);
+		else if (key == "aspect")
 			aspect = Clamp(atoi(val), 0, 3);
 		else if (key == "scanlines")
 			scanlines = atoi(val) != 0;
@@ -80,6 +84,7 @@ void Settings::Save() const
 		return;
 	}
 	fprintf(f, "# Snes9x PS5\n");
+	fprintf(f, "shader=%d\n", shader);
 	fprintf(f, "aspect=%d\n", aspect);
 	fprintf(f, "scanlines=%d\n", scanlines ? 1 : 0);
 	fprintf(f, "show_fps=%d\n", show_fps ? 1 : 0);
