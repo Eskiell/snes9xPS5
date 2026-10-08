@@ -33,7 +33,8 @@ system UI, so the controller never worked. Since 1.6 Snes9x follows PS5SX2's mod
 When it opens, the app asks the helper to let it out of its sandbox; without that an app sees neither `/data`
 nor USB drives. The request is the one PS5SX2 makes:
 
-- **Who is asked, in order:** the Snes9x helper (127.0.0.1:9075), then etaHEN (9028) and the daemon on port 9069.
+- **Who is asked, in order:** the Snes9x helper (127.0.0.1:9080; up to 2.1 the helper used 9075 and is left
+  alone), then etaHEN (9028) and the daemon on port 9069.
 - **If nobody answers:** the app carries a copy of the helper (`Snes9xPS5-helper.elf`), sends it to the ELF
   loader (127.0.0.1:9021) and asks again. So the icon keeps working after a reboot, as long as the ELF loader
   runs.
@@ -48,6 +49,13 @@ written to PS5SX2's folders (`/data/PCSX2`, `/data/homebrew/PPSA99203`).
 Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `snes9x-ps5-v2.1-src.zip`
 (`make dist`). When updating, replace the old ELF with the new one in your autoload or Payload Manager. In this
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
+
+**2.2:** **Covers download in the background.** 2.1 downloaded them before the app opened (up to 30 s with the
+launch screen up) and restarted itself for new ones. Now the helper downloads them while you use the app: it
+starts at once, the covers around the selection come first, and each one appears on the shelf as it lands
+("Downloading covers in the background... N left"). After updating, send `Snes9xPS5-v2.2.elf` once (or let the
+app start its helper itself): 2.1's helper keeps running until the console restarts, but 2.2 uses its own
+(port 9080).
 
 **2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)) and ScaleFX + rAA + AA style; MSU-1 documented and
 tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)); a setting to turn the debug logs off; the fixes of a full code audit (helper, crash-safe saves and states, covers,
@@ -143,18 +151,19 @@ author's line with the GitHub mark: **github.com/MisterTemaki** (PS5SX2 shows it
   - The CRC is taken without a copier header; for a `.zip`, the CRC stored in the zip is used.
   - Loose names (`super mario world.smc`) are recognised too.
   - CRCs are cached in `covers/crc-cache.txt`, so each ROM is read once.
-- **Automatic covers, the PS5SX2 way:** covers come from
+- **Automatic covers, in the background:** covers come from
   [libretro-thumbnails](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System)
-  (`Named_Boxarts`) over HTTPS, with the console's own `libSceHttp2`/`libSceSsl`, in a **prefetch** step right as
-  the app opens, before it asks for `/data` (30 s budget), exactly as PS5SX2 does. After that the shelf downloads
-  nothing (on the console HTTPS fails at that stage; the 1.6.1 logs showed it).
-  - Every start writes the missing covers to `/data/snes9x/covers/wanted.txt`; the helper hands that list to the
-    app at the next start, and the prefetch fetches them.
-  - **New games:** when the app finds covers it hasn't tried yet, it shows "Downloading covers..." and
-    **restarts itself** (as PS5SX2 re-executes its own eboot); the covers arrive on that start.
+  (`Named_Boxarts`) over HTTPS, with the console's own `libSceHttp2`/`libSceSsl`.
+  - The app can't download once it is out of its sandbox (on the console HTTPS fails at that stage; the 1.6.1
+    logs showed it), so the **helper** does it (a payload with network access of its own), while you use the app.
+    The app opens at once and lists the missing covers in `/data/snes9x/covers/wanted.txt`, and the ones around
+    the selection in `covers/priority.txt` (fetched first); the helper downloads them one by one, and each cover
+    replaces its card on the shelf as it lands. The top right corner shows "Downloading covers in the
+    background... N left". The helper keeps going while the app is closed.
+  - With another jailbreak daemon instead of the Snes9x helper (etaHEN, 9069), 2.1's way still works: a prefetch
+    before the app asks for `/data` (30 s), and a restart when new games need covers.
   - Covers are kept in `/data/snes9x/covers/` and never downloaded twice. A cover the server doesn't have is
-    marked (`.missing`) and only looked for again after 30 days; **Square** forces a new try (the app restarts
-    to fetch it).
+    marked (`.missing`) and only looked for again after 30 days; **Square** forces a new try.
   - Without a network nothing is tried and the shelf works the same.
 - **Your own covers:** a `.png` or `.jpg` named after the ROM file, in `/data/snes9x/covers/` or next to the ROM,
   takes priority over downloads.
@@ -348,7 +357,7 @@ If something fails, send the files in `/data/snes9x/logs/`: `boot.log` (the app)
 `helper.log`, plus the previous session's `.prev.log` files. They record every step:
 
 - the sandbox request and who answered;
-- the cover prefetch, cover by cover;
+- the covers, one by one (`helper.log`: the background downloads; `boot.log`: the prefetch, when there is one);
 - every `sceVideoOut*` call;
 - the controller handle and its first read;
 - the shelf and the cover thread, stage by stage.

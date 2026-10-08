@@ -282,7 +282,7 @@ expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
 expect "[ \$(grep -c 'sceVideoOutOpen -> .*80290009' $T/root/logs/boot.log) = 3 ] && grep -q 'scan-out 1920x1080' $T/root/logs/boot.log" "VideoOut busy three times, then opened"
 expect "grep -q 'splash screen hidden' $T/root/logs/boot.log" "the splash screen is hidden"
 
-echo "== 15. covers as PS5SX2: prefetched before asking for /data; new games restart the app to fetch them"
+echo "== 15. covers in the background: the helper downloads them while the shelf runs; an older helper: the prefetch"
 stop_helpers
 T=$(newroot t15)
 SRV=$T/srv/Named_Boxarts; mkdir -p "$SRV" "$T/root/covers"
@@ -294,19 +294,54 @@ SRVPID=$!
 SNES9X_PS5_ROOT=$T/root ASAN_OPTIONS=detect_leaks=0 timeout 120 "$HELPER" >"$T/helper.txt" 2>&1 &
 waitfor "$T/root/logs/helper.log" "listening" || sleep 1
 URL="http://127.0.0.1:$PORT/Named_Boxarts/\${name}.png"
-SHELFQUIT="0:0;30:$OPTIONS;32:0;40:$CROSS;42:0"
-rc=$(OFFLINE= COVER_URL="$URL" run "$T" "$SHELFQUIT" "")
-expect "grep -q 'Super Mario World (USA).png' $T/root/covers/wanted.txt" "first start: the missing cover goes to covers/wanted.txt"
-expect "grep -q 'restarting .* so the prefetch gets them' $T/root/logs/boot*.log" "first start: the app restarts itself for the new cover"
-expect "[ ! -f '$T/root/covers/Super Mario World (USA).png' ]" "first start: nothing downloaded on the shelf (as PS5SX2)"
-rm -f "$T/root/covers/restart.stamp"
-rc=$(OFFLINE= COVER_URL="$URL" run "$T" "$SHELFQUIT" "")
-expect "[ $rc = 0 ]" "second start: exit code 0 (got $rc)"
-expect "cmp -s '$T/root/covers/Super Mario World (USA).png' '$SRV/Super Mario World (USA).png'" "second start: the cover was prefetched and saved"
-expect "awk '/\[prefetch\] 1 of 1 fetched/{p=NR} /\[jailbreak\] pid/{j=NR} END{exit !(p && j && p<j)}' $T/root/logs/boot.log" "the download happened before the request for /data"
-expect "! grep -q 'restarting' $T/root/logs/boot.log" "second start: no restart (nothing new)"
-expect "[ ! -s $T/root/covers/wanted.txt ]" "second start: the wanted list is empty"
+rc=$(OFFLINE= COVER_URL="$URL" SNES9X_HOST_REALTIME=1 run "$T" "0:0;300:$OPTIONS;302:0;310:$CROSS;312:0" "20,280")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q 'the helper downloads the covers while the app runs: nothing to wait for' $T/root/logs/boot.log && ! grep -q 'restarting' $T/root/logs/boot*.log" "the app starts at once: no download before /data, no restart"
+expect "grep -q 'Super Mario World (USA).png' $T/root/covers/wanted.txt" "the missing cover goes to covers/wanted.txt"
+expect "grep -q 'Super Mario World (USA).png -> 200' $T/root/logs/helper.log && cmp -s '$T/root/covers/Super Mario World (USA).png' '$SRV/Super Mario World (USA).png'" "the helper downloaded it into covers/"
+expect "! $CHECK $T/dump/flip00020.ppm 960 420 255 0 0 >/dev/null 2>&1 && $CHECK $T/dump/flip00280.ppm 960 420 255 0 0 >/dev/null" "the shelf showed its card, then the cover once it landed"
+expect "grep -q '^0 1 idle' $T/root/covers/progress.txt" "covers/progress.txt: nothing left, 1 fetched"
 kill $SRVPID 2>/dev/null
+stop_helpers
+# an older helper (2.1's protocol: the list without "covers: background"): the prefetch before /data, as before
+T=$(newroot t15b)
+mkdir -p "$T/srv/Named_Boxarts" "$T/root/covers"
+cp "$SRV/Super Mario World (USA).png" "$T/srv/Named_Boxarts/"
+python3 tests/make_test_rom.py "$T/root/roms/Super Mario World (USA).sfc" ntsc >/dev/null
+(cd "$T/srv" && exec python3 -m http.server $PORT --bind 127.0.0.1 >/dev/null 2>&1) &
+SRVPID=$!
+printf 'Super Mario World (USA).png\thttp://127.0.0.1:%s/Named_Boxarts/Super%%20Mario%%20World%%20%%28USA%%29.png\n' $PORT >"$T/wanted.txt"
+python3 - "$SNES9X_HELPER_PORT" "$T/wanted.txt" <<'PY' &
+import socket, struct, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(4); s.settimeout(60)
+text = open(sys.argv[2], 'rb').read()
+end = time.time() + 60
+while time.time() < end:
+    try:
+        c, _ = s.accept()
+    except OSError:
+        break
+    req = b''
+    while len(req) < 0xA10:
+        d = c.recv(0xA10 - len(req))
+        if not d: break
+        req += d
+    if len(req) == 0xA10:
+        magic, cmd, pid, ret = struct.unpack_from('<IiiI', req, 0)
+        out = bytearray(req)
+        if cmd == 6:
+            struct.pack_into('<i', out, 12, len(text)); c.sendall(bytes(out) + text)
+        elif cmd == 5:
+            struct.pack_into('<i', out, 12, 0); out[16:18] = b'ok'; c.sendall(bytes(out))
+    c.close()
+PY
+OLDPID=$!
+sleep 0.5
+rc=$(OFFLINE= COVER_URL="$URL" run "$T" "0:0;30:$OPTIONS;32:0;40:$CROSS;42:0" "")
+expect "[ $rc = 0 ]" "exit code 0 (got $rc)"
+expect "grep -q '\[prefetch\] 1 of 1 fetched' $T/root/logs/boot.log && cmp -s '$T/root/covers/Super Mario World (USA).png' '$SRV/Super Mario World (USA).png'" "an older helper: the cover is prefetched before /data and saved"
+kill $OLDPID $SRVPID 2>/dev/null
 stop_helpers
 
 echo "== 16. CRT shaders: CRT Easymode style by default, every shader draws, the choice is kept"

@@ -1,7 +1,7 @@
 // Snes9x PS5: the helper payload's side of the jailbreak (ProsperoJailbreak.h).
 //
 // Runs in Snes9xPS5.elf (after it installs the app) and in Snes9xPS5-helper.elf (which the app sends to the
-// ELF loader when no helper answers). One request at a time on 127.0.0.1:9075 only.
+// ELF loader when no helper answers). One request at a time on 127.0.0.1:9080 only (9075 before 2.2).
 //
 // What the jailbreak changes in the Snes9x PS5 process, with the payload SDK's kernel access (the same calls
 // ps5-payload-dev's elfldr makes for the payloads it starts): the root and jail folders become the kernel's
@@ -13,6 +13,7 @@
 #include "ProsperoJailbreak.h"
 
 #include "OrbisPaths.h"
+#include "fe_coverworker.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -242,6 +243,8 @@ bool ServeHelper(void (*on_ready)())
 	OrbisLog("[helper] listening on 127.0.0.1:%d, pid %d", port, int(getpid()));
 	if (on_ready)
 		on_ready();
+	// the covers the app wants, downloaded while it runs (fe_coverworker.h)
+	fe::StartCoverWorker();
 	for (;;)
 	{
 		const int c = accept(srv, nullptr, nullptr);
@@ -263,6 +266,9 @@ bool ServeHelper(void (*on_ready)())
 			// covers/wanted.txt, written by the app after its last scan: a fixed file of ours, nothing else
 			const std::string text = ReadWantedList();
 			req.ret = int32_t(text.size());
+			// this helper downloads them itself, in the background: the app has nothing to wait for
+			memset(req.msg2, 0, sizeof(req.msg2));
+			snprintf(req.msg2, sizeof(req.msg2), "%s", kBackgroundCovers);
 			OrbisLog("[helper] pid %d: wanted-covers list, %zu bytes", req.pid, text.size());
 			if (SendUntil(c, &req, sizeof(req), deadline))
 				SendUntil(c, text.data(), text.size(), deadline);

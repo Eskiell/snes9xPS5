@@ -13,6 +13,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include "fe_coverfetch.h"
 #include "fe_games.h"
 #include "fe_http.h"
 
@@ -20,6 +21,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -49,17 +51,8 @@ std::string ThumbnailName(const std::string& nointro);
 
 // The download address of a game's box art (the libretro-thumbnails template, SNES9X_COVER_URL on the host).
 std::string CoverUrlFor(const std::string& nointro);
-// One GET, following libretro-thumbnails' git symlinks (an "image" that is the real file's name). The HTTP
-// status; `data` is the image when it is 200.
-int FetchCoverUrl(Http& http, std::string url, const std::string& label, std::vector<uint8_t>& data);
-
-// A cover the library still needs: its file in /data/snes9x/covers and where to get it. The list of them is
-// covers/wanted.txt ("file<TAB>url" lines), which the next start's prefetch reads (fe_prefetch.h).
-struct WantedCover
-{
-	std::string file; // "Super Mario World (USA).png"
-	std::string url;
-};
+// The covers the library still needs (WantedCover, fe_coverfetch.h); covers/wanted.txt lists them for the helper,
+// which downloads them in the background (fe_coverworker.h), or for the next start's prefetch (fe_prefetch.h).
 std::vector<WantedCover> MissingCovers(const std::vector<GameInfo>& games);
 void WriteWantedList(const std::vector<WantedCover>& wanted);
 std::string WantedListPath();
@@ -73,7 +66,9 @@ class CoverService
 {
 public:
 	~CoverService() { Stop(); }
-	void Start(const std::vector<GameInfo>& games, bool allow_download);
+	// background: the helper downloads the covers (fe_coverworker.h): show each one as it lands, and tell the helper
+	// which ones are around the selection
+	void Start(const std::vector<GameInfo>& games, bool allow_download, bool background = false);
 	void Stop();
 
 	// The shelf, every frame: the selection (the worker loads around it) ...
@@ -88,6 +83,9 @@ public:
 	int Downloaded() const { return m_downloaded; }
 	int ToDownload() const { return m_to_download; }
 	bool Offline() const { return m_offline; }
+	// The helper's downloads (background): covers left, and whether it is offline.
+	int BackgroundLeft() const { return m_bg_left; }
+	bool BackgroundOffline() const { return m_bg_offline; }
 
 private:
 	void Run();
@@ -97,9 +95,18 @@ private:
 	// No cover of its own, none beside the ROM, none downloaded, and no recent 404: a download is wanted.
 	// Touches the disk: never called with m_lock held.
 	bool NeedsDownload(int i) const;
+	// Background mode, about once a second: reloads covers that landed, writes covers/priority.txt.
+	void PollBackground(int focus);
 
 	std::vector<GameInfo> m_games;
 	bool m_allow_download = true;
+	bool m_background = false;
+	std::vector<uint8_t> m_placeholder; // the game's card is a placeholder (no picture yet)
+	std::map<int, long long> m_refetching; // Square in background mode: game -> its cover file's mtime then
+	int m_prio_focus = -1;
+	std::string m_last_prio;
+	std::atomic<int> m_bg_left{0};
+	std::atomic<bool> m_bg_offline{false};
 	ps5::BigThread m_thread;
 	std::mutex m_lock;
 	std::condition_variable m_wake;
