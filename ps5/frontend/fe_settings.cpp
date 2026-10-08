@@ -23,7 +23,7 @@ int Clamp(int v, int lo, int hi)
 	return v < lo ? lo : (v > hi ? hi : v);
 }
 
-constexpr int kShaderCount = 12; // ps5crt::Shader::Count
+constexpr int kShaderCount = 13; // ps5crt::Shader::Count
 } // namespace
 
 Settings& Config()

@@ -303,7 +303,7 @@ stop_helpers
 
 echo "== 16. CRT shaders: CRT Easymode style by default, every shader draws, the choice is kept"
 QUITAT() { echo "$1:$L3R3;$(($1 + 5)):0;$(($1 + 20)):$UP;$(($1 + 22)):0;$(($1 + 30)):$CROSS;$(($1 + 32)):0"; }
-SHADERS=("Off" "CRT Easymode style" "crt-lottes" "crt-lottes-fast" "crt-1tap" "crt-2tap" "crt-hyllian-fast" "crt-nobody" "newpixie-mini" "crt-blurPi-sharp" "crt-blurPi-soft" "monoCRT")
+SHADERS=("Off" "CRT Easymode style" "crt-lottes" "crt-lottes-fast" "crt-1tap" "crt-2tap" "crt-hyllian-fast" "crt-nobody" "newpixie-mini" "crt-blurPi-sharp" "crt-blurPi-soft" "monoCRT" "ScaleFX + rAA + AA style")
 T=$(newroot t16)
 rm -f "$T/root/snes9x-ps5.ini" # a first start: no settings file yet
 python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
@@ -322,7 +322,7 @@ PY" "scanlines and a phosphor mask on the red picture"
 expect "python3 -c \"import sys; d=open('$T/dump/flip00130.ppm','rb').read().split(b'\\n',3); w=int(d[1].split()[0]); p=d[3]; sys.exit(0 if max(p[(y*w+960)*3+1] for y in range(520,560)) > 150 else 1)\"" "Cross -> green through the shader"
 expect "grep -q 'shader [0-9.]* ms' $T/root/logs/boot.log" "the shader's drawing time is logged"
 expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "no sanitizer reports"
-for s in $(seq 1 11); do
+for s in $(seq 1 12); do
 	T=$(newroot t16s$s)
 	echo "shader=$s" >"$T/root/snes9x-ps5.ini"
 	python3 tests/make_test_rom.py "$T/root/roms/test.sfc" ntsc >/dev/null
@@ -330,6 +330,8 @@ for s in $(seq 1 11); do
 	expect "[ $rc = 0 ] && grep -q 'shader ${SHADERS[$s]} ->' $T/root/logs/boot.log && python3 -c \"import sys; d=open('$T/dump/flip00090.ppm','rb').read().split(b'\\n',3); w=int(d[1].split()[0]); p=d[3]; sys.exit(0 if max(p[(y*w+960)*3] for y in range(500,580)) > 60 else 1)\"" "${SHADERS[$s]} draws the picture"
 	expect "! grep -q 'runtime error\|AddressSanitizer' $T/out.txt" "${SHADERS[$s]}: no sanitizer reports"
 done
+# ScaleFX keeps the picture's own colours: a flat red screen stays exactly red (no scanlines, no mask, no blur)
+expect "$CHECK $T/../t16s12/dump/flip00090.ppm 960 540 255 0 0 2 >/dev/null && $CHECK $T/../t16s12/dump/flip00090.ppm 250 100 255 0 0 2 >/dev/null" "ScaleFX + rAA + AA style: a flat colour stays exactly that colour"
 T=$(newroot t16m)
 python3 tests/make_test_rom.py "$T/root/roms/Alpha (USA).sfc" ntsc >/dev/null
 # Triangle -> settings, the first row is Shader: Right three times -> crt-lottes-fast; Circle -> back; Options + Cross -> quit

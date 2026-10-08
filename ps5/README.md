@@ -11,7 +11,7 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 Everything outside `ps5/` is the original Snes9x source, unchanged.
 
 > **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 138 host tests, which run the same code
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 141 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -44,7 +44,7 @@ Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `sn
 (`make dist`). When updating, replace the old ELF with the new one in your autoload or Payload Manager. In this
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
 
-**2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)); MSU-1 documented and
+**2.1:** CRT shaders (CRT Easymode style by default; see [CRT shaders](#crt-shaders)) and ScaleFX + rAA + AA style; MSU-1 documented and
 tested (see [MSU-1](#msu-1-cd-quality-music-in-snes-games)); a setting to turn the debug logs off. **2.0:** Snes9x as a native
 home-screen app.
 
@@ -157,20 +157,20 @@ author's line with the GitHub mark: **github.com/MisterTemaki** (PS5SX2 shows it
 
 ### Downloading all the covers yourself
 
-To fill the shelf without the console downloading anything (an offline PS5, or a big library), download the whole
-SNES cover set from [libretro-thumbnails](https://github.com/libretro-thumbnails) on a PC:
+Covers to download by hand (a zip with every cover of the system) -- **Snes9x PS5: copy them to
+`/data/snes9x/covers/`**:
 
-| | Link |
-|---|---|
-| All SNES covers at once (zip) | [master.zip](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/archive/refs/heads/master.zip) |
-| Browse them | [Named_Boxarts](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/tree/master/Named_Boxarts) |
-| Copy the images to | `/data/snes9x/covers/` |
+- **SNES:** https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/archive/refs/heads/master.zip
+  (to browse them first: [Named_Boxarts](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System/tree/master/Named_Boxarts))
 
-1. Download the zip and unpack it on the PC. The covers are in its **`Named_Boxarts`** folder (the zip also has
-   title screens and in-game shots: they are not used).
-2. Copy the `.png` files from `Named_Boxarts` (not the folder itself) to `/data/snes9x/covers/`, over FTP for
-   example. Copying only the covers of the games you have saves space: the zip is large.
-3. Open the app: games recognised by name or CRC pick their cover up at once, and nothing is downloaded for them.
+How to use it:
+
+1. Unzip it on the PC.
+2. Copy only the `.png` files inside its **`Named_Boxarts`** folder to the covers folder (over FTP, for example).
+   The zip also has title screens and in-game shots: they are not used. It is large: copying only the covers of
+   your games saves space.
+3. The names are already right (for example `Super Mario World (USA).png`): don't rename them. Open the app:
+   games recognised by name or CRC pick their cover up at once, and nothing is downloaded for them.
 
 Notes:
 
@@ -228,8 +228,8 @@ on in port 2. The light bar shows the player (blue, red, green, pink).
 
 ## CRT shaders
 
-Every game starts through a CRT shader -- **CRT Easymode style** unless you pick another one. Eleven shaders are
-built in, the same as in Genesis Plus GX PS5; they work with every game (hi-res and interlaced pictures included)
+Every game starts through a CRT shader -- **CRT Easymode style** unless you pick another one. Twelve shaders are
+built in: the eleven CRT ones of Genesis Plus GX PS5 and ScaleFX + rAA + AA style; they work with every game (hi-res and interlaced pictures included)
 and only while a game is running (the shelf is drawn without them).
 
 **How to use them**
@@ -254,6 +254,16 @@ and only while a game is running (the shelf is drawn without them).
 | 8 | newpixie-mini | strongly curved TV, colour bleed, vignette, film tone | heavy | Mattias Gustavsson (Unlicense) |
 | 9 / 10 | crt-blurPi-sharp / crt-blurPi-soft | light blur and screen-space scanlines (sharp or bilinear) | light | Oriol Ferrer Mesià (MIT) |
 | 11 | monoCRT | a monochrome monitor (made for black-and-white pictures) | light | hunterk (public domain) |
+| 12 | ScaleFX + rAA + AA style | not a CRT: pixel art redrawn smooth -- staircase edges become clean lines and curves, flat colours stay exact, then a light edge smoothing and deblur | **very heavy** | ScaleFX + rAA post-3x (Sp00kyFox, MIT) from the scalefx+rAA+aa-fast preset; its final steps rewritten for these ports |
+
+**ScaleFX + rAA + AA style** is libretro's `scalefx+rAA+aa-fast` preset: ScaleFX redraws the picture at 3x (edges
+interpolated up to six pixels long, only colours of the original), rAA removes the remaining stair-steps, then a
+smoothing along the edges, the scale to the screen and a deblur. The preset's last three passes (FXAA, guest(r)'s
+AA shader 4.0 and deblur) can't be built in (GPL, or no permission to copy), so original code with the same
+purpose replaces them: the result is close, not identical. It is by far the heaviest shader: on a 2-core test PC it
+takes 27-42 ms a frame on real SNES screens (Super Mario World, Zelda, Super Metroid), so on the PS5's six threads
+expect roughly 9-15 ms, more in hi-res games; check `shader N ms` in `boot.log`, and if a game slows down, pick
+another shader.
 
 Which to pick: **CRT Easymode style** for a sharp, flat arcade-monitor look; **crt-hyllian-fast** for stronger
 scanlines and a visible dot mask; **crt-lottes** or **crt-nobody** for a curved TV; **crt-1tap / crt-2tap** when a
@@ -356,7 +366,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 138 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 141 tests (ASan/UBSan)
 ```
 
 The build has three stages:
@@ -425,7 +435,8 @@ The build has three stages:
   crt-lottes and crt-lottes-fast (Timothy Lottes, public domain), crt-1tap and crt-2tap (fishku, CC0), monoCRT
   (hunterk, public domain), newpixie-mini (Mattias Gustavsson, Unlicense), crt-hyllian-fast and crt-nobody
   (Hyllian, MIT), crt-blurPi (Oriol Ferrer Mesià, MIT). Their notices are in `ps5/THIRD_PARTY_SHADERS.md`.
-  "CRT Easymode style" is original code; the look it follows is EasyMode's crt-easymode.
+  "CRT Easymode style" is original code; the look it follows is EasyMode's crt-easymode. ScaleFX and rAA post-3x
+  (Sp00kyFox, MIT), from the scalefx+rAA+aa-fast preset; its last steps are original code.
 - **UI fonts**, the same as PS5SX2's (which takes them from PCSX2), in `frontend/assets/fonts/` with their
   licenses:
   - **Roboto Regular** (Google, Apache 2.0);
