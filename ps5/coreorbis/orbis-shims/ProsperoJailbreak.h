@@ -20,10 +20,10 @@
 
 namespace jailbreak
 {
-// Snes9x PS5's helper (SNES9X_HELPER_PORT on the host). Up to 2.1 the helper listened on 9075; 2.2's, which also
-// downloads the covers, listens on 9080, so an older helper still running (until the console restarts) is left
-// alone and the app starts its own.
-constexpr int kHelperPort = 9080;
+// Snes9x PS5's helper (SNES9X_HELPER_PORT on the host). Up to 2.1 the helper listened on 9075, 2.2's (the first
+// to download the covers) on 9080; 2.3's, with its own HTTPS, listens on 9083, so an older helper still running
+// (until the console restarts) is left alone and the app starts its own.
+constexpr int kHelperPort = 9083;
 // the ELF loader the helper is sent to when it isn't running (SNES9X_ELFLDR_PORT on the host)
 constexpr int kElfLoaderPort = 9021;
 

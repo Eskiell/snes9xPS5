@@ -15,8 +15,8 @@ own icon and background. The PS5 layer follows the layout of PS5SX2 (the PCSX2 p
 Everything outside `ps5/` is the original Snes9x source, unchanged, apart from this README (the original one is
 [README-Snes9x.md](README-Snes9x.md)).
 
-> **Status (2.1):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
-> work, and games play. It builds with the ps5-payload-dev SDK and passes 162 host tests, which run the same code
+> **Status (2.3):** runs on the console: the app opens from its icon, the shelf, the controller, video and sound
+> work, and games play. It builds with the ps5-payload-dev SDK and passes 173 host tests, which run the same code
 > on Linux with the PS5 calls simulated. If something fails, the logs in `/data/snes9x/logs/` say where.
 
 ## How it works (the PS5SX2 model)
@@ -33,8 +33,8 @@ system UI, so the controller never worked. Since 1.6 Snes9x follows PS5SX2's mod
 When it opens, the app asks the helper to let it out of its sandbox; without that an app sees neither `/data`
 nor USB drives. The request is the one PS5SX2 makes:
 
-- **Who is asked, in order:** the Snes9x helper (127.0.0.1:9080; up to 2.1 the helper used 9075 and is left
-  alone), then etaHEN (9028) and the daemon on port 9069.
+- **Who is asked, in order:** the Snes9x helper (127.0.0.1:9083; older helpers used 9075 up to 2.1 and 9080 in
+  2.2, and are left alone), then etaHEN (9028) and the daemon on port 9069.
 - **If nobody answers:** the app carries a copy of the helper (`Snes9xPS5-helper.elf`), sends it to the ELF
   loader (127.0.0.1:9021) and asks again. So the icon keeps working after a reboot, as long as the ELF loader
   runs.
@@ -46,9 +46,16 @@ written to PS5SX2's folders (`/data/PCSX2`, `/data/homebrew/PPSA99203`).
 
 ## Versions
 
-Every release carries its version in the file name: `Snes9xPS5-v2.1.elf` and `snes9x-ps5-v2.1-src.zip`
+Every release carries its version in the file name: `Snes9xPS5-v2.3.elf` and `snes9x-ps5-v2.3-src.zip`
 (`make dist`). When updating, replace the old ELF with the new one in your autoload or Payload Manager. In this
 README, "`Snes9xPS5.elf`" always means the current release's ELF.
+
+**2.3:** **The helper downloads the covers with its own HTTPS.** In 2.2 the helper got nothing: the console's own
+HTTPS (libSceSsl) fails outside the app's sandbox, and every cover failed in a few milliseconds while the counter
+went down. The helper now has its own HTTPS, as Genesis Plus GX PS5 1.6 does: Mbed TLS, with Mozilla's list of
+certificate authorities, the server's certificate checked as a browser does. It also keeps one connection for
+all its downloads. After updating, send `Snes9xPS5-v2.3.elf` once (or let the app start its helper itself):
+2.2's helper keeps running until the console restarts, but 2.3 uses its own (port 9083).
 
 **2.2:** **Covers download in the background.** 2.1 downloaded them before the app opened (up to 30 s with the
 launch screen up) and restarted itself for new ones. Now the helper downloads them while you use the app: it
@@ -80,7 +87,7 @@ Every screen and notification of Snes9x PS5 is in English.
    nc -q0 PS5_IP 9021 < Snes9xPS5-v2.1.elf
    ```
    It installs the app in `/data/homebrew/PPSA99009/` (`eboot.bin`, `sce_module/libc.prx`, `param.json`, the
-   icon and the backgrounds), shows **"Snes9x PS5 2.1 installed. Open it from the Snes9x PS5 icon on the home
+   icon and the backgrounds), shows **"Snes9x PS5 2.3 installed. Open it from the Snes9x PS5 icon on the home
    screen."** and stays running as the helper.
 2. **Open the Snes9x PS5 icon.** The game shelf appears and the controller works.
 3. **Copy your ROMs** (`.sfc .smc .swc .fig .bs .st .zip .gz`) to `/data/snes9x/roms`, over FTP for example, or
@@ -153,9 +160,11 @@ author's line with the GitHub mark: **github.com/MisterTemaki** (PS5SX2 shows it
   - CRCs are cached in `covers/crc-cache.txt`, so each ROM is read once.
 - **Automatic covers, in the background:** covers come from
   [libretro-thumbnails](https://github.com/libretro-thumbnails/Nintendo_-_Super_Nintendo_Entertainment_System)
-  (`Named_Boxarts`) over HTTPS, with the console's own `libSceHttp2`/`libSceSsl`.
-  - The app can't download once it is out of its sandbox (on the console HTTPS fails at that stage; the 1.6.1
-    logs showed it), so the **helper** does it (a payload with network access of its own), while you use the app.
+  (`Named_Boxarts`) over HTTPS.
+  - The console's own HTTPS (`libSceHttp2`/`libSceSsl`) only works inside the app's sandbox, and the app can't
+    see `/data` until it is out of it. So the **helper** downloads the covers, while you use the app, with HTTPS of
+    its own (since 2.3): Mbed TLS, the server's certificate checked against Mozilla's list of certificate
+    authorities, one connection kept for all the downloads.
     The app opens at once and lists the missing covers in `/data/snes9x/covers/wanted.txt`, and the ones around
     the selection in `covers/priority.txt` (fetched first); the helper downloads them one by one, and each cover
     replaces its card on the shelf as it lands. The top right corner shows "Downloading covers in the
@@ -383,7 +392,7 @@ make ps5 -j$(nproc)              # build/ps5/Snes9xPS5.elf (installer + helper, 
 make send PS5_HOST=192.168.0.10  # sends it to elfldr (port 9021)
 make dist                        # build/dist/Snes9xPS5-v<version>.elf + the source zip
 make app                         # only build/app/PPSA99009/, to copy by hand
-make test                        # Linux builds (app, installer, helper) + 162 tests (ASan/UBSan)
+make test                        # Linux builds (app, installer, helper) + 173 tests (ASan/UBSan)
 ```
 
 The build has three stages:
@@ -422,7 +431,9 @@ The build has three stages:
 - **`ps5/coreorbis/include-orbis/ProsperoSce.h`**: prototypes of the system functions (the SDK ships the import
   stubs but not the headers).
 - **`ps5/frontend/`**: the 3D shelf (`fe_shelf.cpp`), covers (`fe_covers.cpp`, `fe_prefetch.cpp`), the library
-  and No-Intro names (`fe_games.cpp`, `data/snes-nointro.tsv`), HTTPS (`fe_http.cpp`), text with PS5SX2's fonts
+  and No-Intro names (`fe_games.cpp`, `data/snes-nointro.tsv`), HTTPS (`fe_http.cpp`; the helper's own: `fe_tlshttp.cpp`, `fe_mbedtls_config.h`, `data/cacert.pem`, with
+  Mbed TLS 3.6.7 in `third_party/mbedtls`), the helper's background downloads (`fe_coverworker.cpp`,
+  `fe_coverfetch.cpp`), text with PS5SX2's fonts
   (`fe_text.cpp`), menus, settings, and `fe_emu.cpp`, which connects the Snes9x core to the PS5 layer.
 - **`ps5/proto/native/`**: ps5-native-app-boilerplate's tools (BlackBearReloaded, GPL-3.0), taken from PS5SX2
   and PS5_Vulkan (mihawk-99):
@@ -432,7 +443,9 @@ The build has three stages:
   - `libc_builder.cpp` and its manifests.
 - **`ps5/app/sce_sys/`**: param.json, icon and backgrounds.
 - **`ps5/host/sce_host.cpp`** and **`ps5/tests/`**: the PS5 functions implemented on Linux, and the tests. They
-  check the picture, controller, save states, PAL, zip, sound, covers, install, helper and sandbox request.
+  check the picture, controller, save states, PAL, zip, sound, covers, install, helper and sandbox request, and
+  the helper's HTTPS against a local server with a test certificate authority (a certificate from another
+  authority or for another name refused, chunked answers, redirects, the connection kept).
 
 ## License and credits
 
@@ -447,6 +460,10 @@ The build has three stages:
   the cover prefetch and exiting through the system).
 - The VideoOut tiling and setup follow the SDK's SDL2 port (zlib license).
 - **zlib** (Jean-loup Gailly and Mark Adler): zlib license.
+- **Mbed TLS** 3.6.7 ([github.com/Mbed-TLS/mbedtls](https://github.com/Mbed-TLS/mbedtls), the Mbed TLS
+  contributors): Apache-2.0 (`ps5/frontend/third_party/mbedtls/LICENSE`).
+- **Mozilla's CA certificate list** (`ps5/frontend/data/cacert.pem`, as packaged by
+  [certifi](https://github.com/certifi/python-certifi) 2026.07.22): MPL-2.0.
 - **stb_image / stb_image_resize2 / stb_truetype** (Sean Barrett): public domain or MIT, the same as PS5SX2.
 - **CRT shaders** from libretro's [slang-shaders](https://github.com/libretro/slang-shaders), rewritten for the CPU:
   crt-lottes and crt-lottes-fast (Timothy Lottes, public domain), crt-1tap and crt-2tap (fishku, CC0), monoCRT

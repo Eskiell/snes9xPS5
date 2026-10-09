@@ -1,7 +1,7 @@
 // Snes9x PS5: the helper payload's side of the jailbreak (ProsperoJailbreak.h).
 //
 // Runs in Snes9xPS5.elf (after it installs the app) and in Snes9xPS5-helper.elf (which the app sends to the
-// ELF loader when no helper answers). One request at a time on 127.0.0.1:9080 only (9075 before 2.2).
+// ELF loader when no helper answers). One request at a time on 127.0.0.1:9083 only (9075 before 2.2, 9080 in 2.2).
 //
 // What the jailbreak changes in the Snes9x PS5 process, with the payload SDK's kernel access (the same calls
 // ps5-payload-dev's elfldr makes for the payloads it starts): the root and jail folders become the kernel's
